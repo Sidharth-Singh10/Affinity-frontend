@@ -1,6 +1,4 @@
-/**
- * API utility functions for making authenticated requests to the backend
- */
+import { SignupFormData } from "@/types/model"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 
@@ -77,11 +75,11 @@ export async function apiRequest<T = any>(
 ): Promise<{ data?: T; error?: string }> {
   const token = getAuthToken()
   const userId = getUserId()
-  
+
   log(`Making ${options.method || 'GET'} request to ${endpoint}`)
   log(`Auth token: ${token ? 'Present' : 'Missing'}`)
   log(`User ID: ${userId || 'Missing'}`)
-  
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
@@ -106,7 +104,7 @@ export async function apiRequest<T = any>(
     try {
       const url = `${API_BASE_URL}${endpoint}`
       log(`Attempt ${attempt + 1}/${retries + 1}: Fetching ${url}`)
-      
+
       const response = await fetch(url, {
         ...options,
         headers,
@@ -124,7 +122,7 @@ export async function apiRequest<T = any>(
       if (!response.ok) {
         let errorText = `Request failed with status ${response.status}`
         let errorDetails = ''
-        
+
         // Try to get error message from response
         if (hasJsonContent) {
           try {
@@ -147,10 +145,10 @@ export async function apiRequest<T = any>(
             // Ignore
           }
         }
-        
+
         logError(`${options.method || 'GET'} ${endpoint} failed:`, response.status, errorText)
         if (errorDetails) logError('Error details:', errorDetails)
-        
+
         // Don't retry on auth errors (401, 403)
         if (response.status === 401 || response.status === 403) {
           logError('Authentication error - clearing token')
@@ -160,7 +158,7 @@ export async function apiRequest<T = any>(
           }
           return { error: errorText }
         }
-        
+
         // Retry on server errors (500+) and rate limits (429)
         if (attempt < retries && (response.status >= 500 || response.status === 429)) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 5000) // Exponential backoff
@@ -168,7 +166,7 @@ export async function apiRequest<T = any>(
           await new Promise(resolve => setTimeout(resolve, delay))
           continue
         }
-        
+
         return { error: errorText }
       }
 
@@ -183,7 +181,7 @@ export async function apiRequest<T = any>(
       return { data }
     } catch (error) {
       logError(`API request error (attempt ${attempt + 1}/${retries + 1}):`, error)
-      
+
       // Retry on network errors
       if (attempt < retries) {
         const delay = Math.min(1000 * Math.pow(2, attempt), 5000)
@@ -191,7 +189,7 @@ export async function apiRequest<T = any>(
         await new Promise(resolve => setTimeout(resolve, delay))
         continue
       }
-      
+
       return { error: 'Network error. Please check your connection and try again.' }
     }
   }
@@ -210,8 +208,8 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
 
-  signup: (data: { name: string; email: string; password: string; gender: string; age: number; city: string }) =>
-    apiRequest('/api/auth/signup', {
+  signup: (data: SignupFormData) =>
+    apiRequest('/auth/signup', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -260,7 +258,7 @@ export const api = {
     if (params.age_max) queryParams.set('age_max', params.age_max.toString())
     if (params.limit) queryParams.set('limit', params.limit.toString())
     if (params.min_score !== undefined) queryParams.set('min_score', params.min_score.toString())
-    
+
     return apiRequest(`/api/match/recommendations?${queryParams.toString()}`)
   },
 
@@ -342,6 +340,34 @@ export const api = {
 
   getDashboardStats: () =>
     apiRequest('/api/stats/dashboard'),
+
+  // aws
+  getPresignedUrl: async (filename: string): Promise<{ data?: string; error?: string }> => {
+    return apiRequest<string>(`/aws/presigned_url?filename=${encodeURIComponent(filename)}`, {
+      method: 'GET',
+    })
+  },
+
+
+  uploadToS3: async (presignedUrl: string, file: File) => {
+    try {
+      const response = await fetch(presignedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+      })
+      if (!response.ok) throw new Error(await response.text())
+
+      const url = new URL(presignedUrl)
+      const imageName = url.pathname.split('/').pop()
+      const imageUrl = `https://affinitys3.s3.ap-south-1.amazonaws.com/uploads/${imageName}`
+      return { imageUrl }
+    } catch (error) {
+      logError('S3 upload error:', error)
+      return { error: 'Failed to upload to S3' }
+    }
+  },
+
 }
 
 export default api

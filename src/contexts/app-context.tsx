@@ -298,33 +298,34 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return { success: false, error: response.error || 'Signup failed' }
       }
 
-      const { token, user_id } = response.data
-      logger.log('Signup successful, user_id:', user_id)
+      // const token  = response.data.token
+      // const user_id  = response.data.user.id 
+      // logger.log('Signup successful, user_id:', user_id)
       
-      // Store authentication data using the helper function
-      setAuth(token, user_id, userData.email, userData.name)
+      // // Store authentication data using the helper function
+      // setAuth(token, user_id, userData.email, userData.name)
       
-      // Fetch full profile (should include the data they just provided)
-      logger.log('Fetching new user profile...')
-      const profile = await fetchUserProfile(user_id.toString())
+      // // Fetch full profile (should include the data they just provided)
+      // logger.log('Fetching new user profile...')
+      // const profile = await fetchUserProfile(user_id.toString())
       
-      if (profile) {
-        logger.log('New user profile fetched:', profile)
-        setUser(profile)
-        toast.success('Welcome!', `Account created successfully`)
-      } else {
-        logger.warn('Profile fetch failed after signup, using provided data')
-        // Use the data they provided during signup
-        setUser({ 
-          id: user_id.toString(), 
-          email: userData.email, 
-          name: userData.name,
-          age: userData.age,
-          city: userData.city,
-          gender: userData.gender
-        })
-        toast.success('Welcome!', 'Account created successfully')
-      }
+      // if (profile) {
+      //   logger.log('New user profile fetched:', profile)
+      //   setUser(profile)
+      //   toast.success('Welcome!', `Account created successfully`)
+      // } else {
+      //   logger.warn('Profile fetch failed after signup, using provided data')
+      //   // Use the data they provided during signup
+      //   setUser({ 
+      //     id: user_id.toString(), 
+      //     email: userData.email, 
+      //     name: userData.name,
+      //     age: userData.age,
+      //     city: userData.city,
+      //     gender: userData.gender
+      //   })
+      //   toast.success('Welcome!', 'Account created successfully')
+      // }
 
       return { success: true }
     } catch (error) {

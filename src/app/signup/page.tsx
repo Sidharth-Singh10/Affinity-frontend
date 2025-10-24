@@ -16,6 +16,7 @@ import { PublicRoute } from "@/components/auth/public-route"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
+import { SignupFormData } from "@/types/model"
 
 interface FormData {
   firstName: string
@@ -73,6 +74,7 @@ const interestOptions = [
 ]
 
 export default function SignupPage() {
+
   const [currentStep, setCurrentStep] = useState(1)
   const [showPassword, setShowPassword] = useState(false)
   const [expectedQualitiesInput, setExpectedQualitiesInput] = useState("")
@@ -80,10 +82,10 @@ export default function SignupPage() {
   const [error, setError] = useState("")
   const [emailError, setEmailError] = useState("")
   const [isCheckingEmail, setIsCheckingEmail] = useState(false)
-  
+
   const { signup, isLoading } = useAuth()
   const router = useRouter()
-  
+
   const [formData, setFormData] = useState<FormData>({
     firstName: "",
     lastName: "",
@@ -127,7 +129,7 @@ export default function SignupPage() {
 
     try {
       const result = await api.checkEmail(email)
-      
+
       if (result.error) {
         // If backend doesn't support email check, silently continue
         console.warn("Email check not available:", result.error)
@@ -155,7 +157,7 @@ export default function SignupPage() {
         return
       }
     }
-    
+
     if (currentStep === 2) {
       if (!formData.email || !formData.password || !formData.username) {
         setError("Please fill in all required fields")
@@ -178,7 +180,7 @@ export default function SignupPage() {
         return
       }
     }
-    
+
     if (currentStep === 3) {
       if (!formData.openness || !formData.relationType || !formData.pastRelationships) {
         setError("Please complete all sections")
@@ -188,7 +190,7 @@ export default function SignupPage() {
         return
       }
     }
-    
+
     setError("") // Clear any existing errors
     if (currentStep < steps.length) {
       setCurrentStep(currentStep + 1)
@@ -251,13 +253,12 @@ export default function SignupPage() {
       socialHabits: prev.socialHabits.filter((h) => h !== habit),
     }))
   }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
-    
+
     console.log("Form submission started", { currentStep, formData })
-    
+
     // Comprehensive validation
     if (!formData.firstName || !formData.lastName || !formData.email || !formData.password) {
       const errorMsg = "Please fill in all required fields"
@@ -267,7 +268,7 @@ export default function SignupPage() {
       })
       return
     }
-    
+
     if (!formData.gender || !formData.age || !formData.location) {
       const errorMsg = "Please complete your basic information"
       setError(errorMsg)
@@ -276,7 +277,7 @@ export default function SignupPage() {
       })
       return
     }
-    
+
     if (formData.password.length < 6) {
       const errorMsg = "Password must be at least 6 characters long"
       setError(errorMsg)
@@ -292,43 +293,64 @@ export default function SignupPage() {
       })
       return
     }
-    
+
     // Show loading toast
     const loadingToast = toast.loading("Creating your account...")
-    
-    // Prepare signup data for backend
-    const signupData: SignupData = {
-      name: `${formData.firstName} ${formData.lastName}`,
-      email: formData.email,
+
+    // Prepare complete signup data for backend
+    const signupData: SignupFormData = {
+      username: formData.username,
       password: formData.password,
+      first_name: formData.firstName,
+      last_name: formData.lastName,
+      email: formData.email,
       gender: genderMapping[formData.gender] || 'O', // Map to M/F/O
       age: parseInt(formData.age),
-      city: formData.location,
+      location: formData.location || undefined,
+      openness: formData.openness || undefined,
+      interests: formData.interests.length > 0 ? formData.interests.join(',') : undefined,
+      exp_qual: formData.expectedQualities.length > 0 ? formData.expectedQualities.join(',') : undefined,
+      relation_type: formData.relationType || undefined,
+      social_habits: formData.socialHabits.length > 0 ? formData.socialHabits.join(',') : undefined,
+      past_relations: formData.pastRelationships || undefined,
+      score: 0.0, // Default score
+      // Optional fields that aren't collected in this form yet
+      values: undefined,
+      style: undefined,
+      traits: undefined,
+      commitment: undefined,
+      resolution: undefined,
+      image_url: (formData as any).imageUrl || undefined,
     }
-    
+
+    console.log("Sending signup data:", signupData)
+
     // Call signup function
     const result = await signup(signupData)
-    
+
     // Dismiss loading toast
     toast.dismiss(loadingToast)
-    
+
     if (result.success) {
       // Show success toast
       toast.success("Account Created Successfully!", {
         description: "Welcome to Affinity! Redirecting to your dashboard...",
       })
-      // Redirect to dashboard or profile completion page
-      setTimeout(() => {
-        router.push("/dashboard")
-      }, 1000)
+
+      router.push("/login")
+
     } else {
       const errorMsg = result.error || "Signup failed. Please try again."
       setError(errorMsg)
-      
+
       // Show specific error toasts based on error message
       if (errorMsg.toLowerCase().includes("email") && errorMsg.toLowerCase().includes("already")) {
         toast.error("Email Already Registered", {
           description: "This email is already in use. Please try logging in or use a different email.",
+        })
+      } else if (errorMsg.toLowerCase().includes("username") && errorMsg.toLowerCase().includes("taken")) {
+        toast.error("Username Taken", {
+          description: "This username is already taken. Please choose a different username.",
         })
       } else if (errorMsg.toLowerCase().includes("password")) {
         toast.error("Password Error", {
@@ -343,6 +365,35 @@ export default function SignupPage() {
           description: errorMsg,
         })
       }
+    }
+  }
+
+  const handleProfilePictureUpload = async (file: File): Promise<string | null> => {
+    try {
+      // Step 1: Get presigned URL from backend
+      const { data: presignedUrl, error } = await api.getPresignedUrl(file.name)
+
+      if (error || !presignedUrl) {
+        console.error('Error fetching presigned URL:', error)
+        toast.error("Upload Failed", { description: "Could not get upload URL." })
+        return null
+      }
+
+      // Step 2: Upload file to S3
+      const uploadResult = await api.uploadToS3(presignedUrl, file)
+      if (uploadResult.error) {
+        console.error("S3 upload failed:", uploadResult.error)
+        toast.error("Upload Failed", { description: uploadResult.error })
+        return null
+      }
+
+      // Step 3: Return the uploaded image URL
+      toast.success("Profile Photo Uploaded", { description: "Your image has been uploaded successfully." })
+      return uploadResult.imageUrl || ''
+    } catch (err) {
+      console.error("Unexpected upload error:", err)
+      toast.error("Upload Error", { description: "Something went wrong during upload." })
+      return null
     }
   }
 
@@ -447,9 +498,8 @@ export default function SignupPage() {
                     setEmailError("") // Clear error on change
                   }}
                   onBlur={(e) => checkEmailAvailability(e.target.value)}
-                  className={`bg-white/5 border-white/20 focus:border-[#FF0059] focus:ring-[#FF0059]/30 rounded-xl h-14 font-medium transition-all duration-300 hover:border-white/30 ${
-                    emailError ? "border-red-500/50" : ""
-                  }`}
+                  className={`bg-white/5 border-white/20 focus:border-[#FF0059] focus:ring-[#FF0059]/30 rounded-xl h-14 font-medium transition-all duration-300 hover:border-white/30 ${emailError ? "border-red-500/50" : ""
+                    }`}
                   required
                 />
                 {isCheckingEmail && (
@@ -512,9 +562,8 @@ export default function SignupPage() {
                     {[...Array(5)].map((_, i) => (
                       <div
                         key={i}
-                        className={`h-2 flex-1 rounded-full transition-all duration-300 ${
-                          i < passwordStrength ? strengthColors[passwordStrength - 1] : "bg-white/20"
-                        }`}
+                        className={`h-2 flex-1 rounded-full transition-all duration-300 ${i < passwordStrength ? strengthColors[passwordStrength - 1] : "bg-white/20"
+                          }`}
                       />
                     ))}
                   </div>
@@ -538,11 +587,10 @@ export default function SignupPage() {
                     key={type}
                     type="button"
                     onClick={() => setFormData({ ...formData, openness: type })}
-                    className={`p-4 rounded-xl border-2 transition-all duration-300 font-semibold ${
-                      formData.openness === type
-                        ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
-                        : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
-                    }`}
+                    className={`p-4 rounded-xl border-2 transition-all duration-300 font-semibold ${formData.openness === type
+                      ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
+                      : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
+                      }`}
                   >
                     {type.charAt(0).toUpperCase() + type.slice(1)}
                   </button>
@@ -558,11 +606,10 @@ export default function SignupPage() {
                     key={type}
                     type="button"
                     onClick={() => setFormData({ ...formData, relationType: type })}
-                    className={`p-4 rounded-xl border-2 transition-all duration-300 font-semibold ${
-                      formData.relationType === type
-                        ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
-                        : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
-                    }`}
+                    className={`p-4 rounded-xl border-2 transition-all duration-300 font-semibold ${formData.relationType === type
+                      ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
+                      : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
+                      }`}
                   >
                     {type.charAt(0).toUpperCase() + type.slice(1).replace("-", " ")}
                   </button>
@@ -578,11 +625,10 @@ export default function SignupPage() {
                     key={option}
                     type="button"
                     onClick={() => setFormData({ ...formData, pastRelationships: option })}
-                    className={`p-4 rounded-xl border-2 transition-all duration-300 font-semibold ${
-                      formData.pastRelationships === option
-                        ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
-                        : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
-                    }`}
+                    className={`p-4 rounded-xl border-2 transition-all duration-300 font-semibold ${formData.pastRelationships === option
+                      ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
+                      : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
+                      }`}
                   >
                     {option.charAt(0).toUpperCase() + option.slice(1)}
                   </button>
@@ -636,11 +682,10 @@ export default function SignupPage() {
                     key={interest}
                     type="button"
                     onClick={() => handleInterestToggle(interest)}
-                    className={`p-3 rounded-lg border-2 text-sm transition-all duration-300 font-medium ${
-                      formData.interests.includes(interest)
-                        ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
-                        : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
-                    }`}
+                    className={`p-3 rounded-lg border-2 text-sm transition-all duration-300 font-medium ${formData.interests.includes(interest)
+                      ? "border-[#FF0059] bg-[#FF0059]/10 text-[#FF0059] shadow-lg shadow-[#FF0059]/25"
+                      : "border-white/20 bg-white/5 text-white/70 hover:border-white/40 hover:bg-white/10"
+                      }`}
                   >
                     {interest}
                   </button>
@@ -701,10 +746,19 @@ export default function SignupPage() {
               <input
                 type="file"
                 accept="image/*"
-                onChange={(e) => {
+                onChange={async (e) => {
                   const file = e.target.files?.[0]
-                  if (file) {
-                    setFormData({ ...formData, profilePicture: file })
+                  if (!file) return
+
+                  setFormData((prev) => ({ ...prev, profilePicture: file }))
+
+                  const imageUrl = await handleProfilePictureUpload(file)
+                  if (imageUrl) {
+                    setFormData((prev) => ({
+                      ...prev,
+                      profilePicture: file,
+                      imageUrl,
+                    }))
                   }
                 }}
                 className="hidden"
@@ -750,139 +804,138 @@ export default function SignupPage() {
               <div className="w-10 h-10 bg-gradient-to-br from-[#FF0059] to-[#FF0059]/80 rounded-xl flex items-center justify-center shadow-lg shadow-[#FF0059]/25 group-hover:shadow-[#FF0059]/40 transition-all duration-300">
                 <span className="text-white font-black text-lg">A</span>
               </div>
-            <span className="text-2xl font-bold tracking-tight">Affinity</span>
-          </Link>
+              <span className="text-2xl font-bold tracking-tight">Affinity</span>
+            </Link>
 
-          <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-white to-white/80 bg-clip-text text-transparent">
-            Create your account
-          </h1>
-          <p className="text-white/60 text-lg">Join thousands of developers finding meaningful connections</p>
-        </motion.div>
+            <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-white to-white/80 bg-clip-text text-transparent">
+              Create your account
+            </h1>
+            <p className="text-white/60 text-lg">Join thousands of developers finding meaningful connections</p>
+          </motion.div>
 
-        {/* Enhanced progress indicator */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-          className="mb-10"
-        >
-          <div className="flex items-center justify-between mb-6">
-            {steps.map((step, index) => (
-              <div key={step.id} className="flex items-center">
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-500 ${
-                    currentStep >= step.id
+          {/* Enhanced progress indicator */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.1 }}
+            className="mb-10"
+          >
+            <div className="flex items-center justify-between mb-6">
+              {steps.map((step, index) => (
+                <div key={step.id} className="flex items-center">
+                  <div
+                    className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-500 ${currentStep >= step.id
                       ? "bg-gradient-to-r from-[#FF0059] to-[#FF0059]/80 text-white shadow-lg shadow-[#FF0059]/30"
                       : "bg-white/10 text-white/50 border-2 border-white/20"
-                  }`}
-                >
-                  {currentStep > step.id ? <Check className="h-5 w-5" /> : step.id}
-                </div>
-                {index < steps.length - 1 && (
-                  <div
-                    className={`w-20 h-1 mx-3 rounded-full transition-all duration-500 ${
-                      currentStep > step.id ? "bg-gradient-to-r from-[#FF0059] to-[#FF0059]/80" : "bg-white/20"
-                    }`}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="text-center">
-            <h2 className="text-xl font-bold">{steps[currentStep - 1].title}</h2>
-            <p className="text-sm text-white/60 font-medium">{steps[currentStep - 1].description}</p>
-          </div>
-        </motion.div>
-
-        {/* Enhanced form */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          className="bg-black/60 backdrop-blur-xl border border-white/10 rounded-3xl p-10 shadow-2xl shadow-[#FF0059]/10"
-        >
-          {error && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl"
-            >
-              <p className="text-red-400 text-sm font-medium">{error}</p>
-            </motion.div>
-          )}
-          
-          <form onSubmit={handleSubmit}>
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={currentStep}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                transition={{ duration: 0.3 }}
-              >
-                {renderStep()}
-              </motion.div>
-            </AnimatePresence>
-
-            {/* Enhanced navigation buttons */}
-            <div className="flex justify-between mt-10">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handlePrev}
-                disabled={currentStep === 1}
-                className="border-white/20 hover:border-[#FF0059]/50 bg-white/5 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-xl font-semibold transition-all duration-300"
-              >
-                <ArrowLeft className="h-5 w-5 mr-2" />
-                Previous
-              </Button>
-
-              {currentStep === steps.length ? (
-                <Button
-                  type="submit"
-                  disabled={isLoading}
-                  className="bg-gradient-to-r from-[#FF0059] to-[#FF0059]/90 hover:from-[#FF0059]/90 hover:to-[#FF0059]/80 text-white px-8 py-3 rounded-xl font-bold group transition-all duration-300 hover:scale-[1.02] shadow-lg shadow-[#FF0059]/25 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading ? (
-                    <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                      Creating Account...
-                    </>
-                  ) : (
-                    <>
-                      Create Account
-                      <Check className="ml-2 h-5 w-5 group-hover:scale-110 transition-transform" />
-                    </>
+                      }`}
+                  >
+                    {currentStep > step.id ? <Check className="h-5 w-5" /> : step.id}
+                  </div>
+                  {index < steps.length - 1 && (
+                    <div
+                      className={`w-20 h-1 mx-3 rounded-full transition-all duration-500 ${currentStep > step.id ? "bg-gradient-to-r from-[#FF0059] to-[#FF0059]/80" : "bg-white/20"
+                        }`}
+                    />
                   )}
-                </Button>
-              ) : (
+                </div>
+              ))}
+            </div>
+            <div className="text-center">
+              <h2 className="text-xl font-bold">{steps[currentStep - 1].title}</h2>
+              <p className="text-sm text-white/60 font-medium">{steps[currentStep - 1].description}</p>
+            </div>
+          </motion.div>
+
+          {/* Enhanced form */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            className="bg-black/60 backdrop-blur-xl border border-white/10 rounded-3xl p-10 shadow-2xl shadow-[#FF0059]/10"
+          >
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl"
+              >
+                <p className="text-red-400 text-sm font-medium">{error}</p>
+              </motion.div>
+            )}
+
+            <form>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={currentStep}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  {renderStep()}
+                </motion.div>
+              </AnimatePresence>
+
+              {/* Enhanced navigation buttons */}
+              <div className="flex justify-between mt-10">
                 <Button
                   type="button"
-                  onClick={handleNext}
-                  className="bg-gradient-to-r from-[#FF0059] to-[#FF0059]/90 hover:from-[#FF0059]/90 hover:to-[#FF0059]/80 text-white px-8 py-3 rounded-xl font-bold group transition-all duration-300 hover:scale-[1.02] shadow-lg shadow-[#FF0059]/25"
+                  variant="outline"
+                  onClick={handlePrev}
+                  disabled={currentStep === 1}
+                  className="border-white/20 hover:border-[#FF0059]/50 bg-white/5 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-xl font-semibold transition-all duration-300"
                 >
-                  Next
-                  <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
+                  <ArrowLeft className="h-5 w-5 mr-2" />
+                  Previous
                 </Button>
-              )}
-            </div>
-          </form>
-        </motion.div>
+                {currentStep === steps.length ? (
+                  <Button
+                    type="button"
+                    disabled={isLoading}
+                    onClick={handleSubmit}
+                    className="bg-gradient-to-r from-[#FF0059] to-[#FF0059]/90 hover:from-[#FF0059]/90 hover:to-[#FF0059]/80 text-white px-8 py-3 rounded-xl font-bold group transition-all duration-300 hover:scale-[1.02] shadow-lg shadow-[#FF0059]/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                        Creating Account...
+                      </>
+                    ) : (
+                      <>
+                        Create Account
+                        <Check className="ml-2 h-5 w-5 group-hover:scale-110 transition-transform" />
+                      </>
+                    )}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    onClick={handleNext}
+                    className="bg-gradient-to-r from-[#FF0059] to-[#FF0059]/90 hover:from-[#FF0059]/90 hover:to-[#FF0059]/80 text-white px-8 py-3 rounded-xl font-bold group transition-all duration-300 hover:scale-[1.02] shadow-lg shadow-[#FF0059]/25"
+                  >
+                    Next
+                    <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
+                  </Button>
+                )}
 
-        {/* Enhanced footer */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.4 }}
-          className="text-center mt-10"
-        >
-          <p className="text-white/60 text-lg">
-            Already have an account?{" "}
-            <Link href="/login" className="text-[#FF0059] hover:text-[#FF0059]/80 transition-colors font-bold">
-              Sign in
-            </Link>
-          </p>
-        </motion.div>
+              </div>
+            </form>
+          </motion.div>
+
+          {/* Enhanced footer */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.4 }}
+            className="text-center mt-10"
+          >
+            <p className="text-white/60 text-lg">
+              Already have an account?{" "}
+              <Link href="/login" className="text-[#FF0059] hover:text-[#FF0059]/80 transition-colors font-bold">
+                Sign in
+              </Link>
+            </p>
+          </motion.div>
         </div>
       </div>
     </PublicRoute>

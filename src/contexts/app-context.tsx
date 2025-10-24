@@ -252,7 +252,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return { success: false, error: response.error || 'Login failed' }
       }
 
-      const { token, user_id } = response.data
+      const token = response.data.token
+      const user_id = response.data.user.id
       logger.log('Login successful, user_id:', user_id)
       
       // Store authentication data using the helper function

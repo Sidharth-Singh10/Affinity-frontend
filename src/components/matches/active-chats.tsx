@@ -2,64 +2,54 @@
 
 import { motion } from "framer-motion"
 import { Button } from "@/components/ui/button"
-import { MessageCircle, Search, MoreHorizontal, Loader2 } from "lucide-react"
+import { MessageCircle, Search, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { useState, useEffect } from "react"
-import { api } from "@/lib/api"
 import { useRouter } from "next/navigation"
-
-interface Match {
-  match_id: number
-  user_id: number
-  name: string
-  image: string
-  last_message?: string
-  last_message_at?: string
-  unread_count: number
-}
+import { useApp } from "@/contexts/app-context"
 
 export function ActiveChats() {
-  const [matches, setMatches] = useState<Match[]>([])
-  const [filteredMatches, setFilteredMatches] = useState<Match[]>([])
+  const [filteredMatches, setFilteredMatches] = useState<any[]>([])
   const [searchQuery, setSearchQuery] = useState("")
-  const [loading, setLoading] = useState(true)
   const router = useRouter()
 
+  // Get matches from AppContext
+  const { matches, isLoading, fetchMatches } = useApp()
+  const [localLoading, setLocalLoading] = useState(true)
+
   useEffect(() => {
-    fetchMatches()
+    const loadData = async () => {
+      setLocalLoading(true)
+      await fetchMatches()
+      setLocalLoading(false)
+    }
+
+    loadData()
   }, [])
 
   useEffect(() => {
     if (searchQuery.trim() === "") {
-      setFilteredMatches(matches)
+      // Show only matches with last_message for active chats
+      const activeChats = Array.isArray(matches)
+        ? matches.filter(m => m.last_message).slice(0, 5)
+        : []
+      setFilteredMatches(activeChats)
     } else {
-      const filtered = matches.filter((match) =>
-        match.name.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+      const filtered = Array.isArray(matches)
+        ? matches.filter((match) =>
+          match.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+          match.last_message
+        )
+        : []
       setFilteredMatches(filtered)
     }
   }, [searchQuery, matches])
 
-  const fetchMatches = async () => {
-    setLoading(true)
-    const { data } = await api.getRecentMatches()
-    
-    if (data?.matches) {
-      // Filter only matches with messages for active chats
-      const activeChats = data.matches
-        .filter((match: Match) => match.last_message)
-        .slice(0, 5) // Show only top 5 recent chats
-      setMatches(activeChats)
-      setFilteredMatches(activeChats)
-    }
-    setLoading(false)
+  const handleChatClick = (matchId: number, userId: number) => {
+    router.push(`/chat?match_id=${matchId}&user_id=${userId}`)
   }
 
-  const handleChatClick = (matchId: number) => {
-    router.push(`/chat?match_id=${matchId}`)
-  }
-
-  if (loading) {
+  if (localLoading || isLoading) {
     return (
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -71,6 +61,10 @@ export function ActiveChats() {
       </motion.div>
     )
   }
+
+  const activeChatsCount = Array.isArray(matches)
+    ? matches.filter(m => m.last_message).length
+    : 0
 
   return (
     <motion.div
@@ -84,7 +78,7 @@ export function ActiveChats() {
           <MessageCircle className="h-5 w-5 text-[#FF0059]" />
           <h3 className="text-lg font-semibold text-white">Active Chats</h3>
         </div>
-        <span className="text-sm text-white/60">{matches.length}</span>
+        <span className="text-sm text-white/60">{activeChatsCount}</span>
       </div>
 
       {/* Search */}
@@ -105,6 +99,11 @@ export function ActiveChats() {
           <p className="text-white/60 text-sm">
             {searchQuery ? "No conversations found" : "No active chats yet"}
           </p>
+          {!searchQuery && activeChatsCount === 0 && (
+            <p className="text-white/50 text-xs mt-2">
+              Start chatting with your matches!
+            </p>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -115,13 +114,17 @@ export function ActiveChats() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.4, delay: index * 0.1 }}
               className="flex items-center gap-3 p-3 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl cursor-pointer transition-all duration-300"
-              onClick={() => handleChatClick(chat.match_id)}
+              onClick={() => handleChatClick(chat.match_id, chat.user_id)}
             >
               <div className="relative">
                 <img
-                  src={chat.image || "/default.jpg"}
+                  src={chat.image}
                   alt={chat.name}
                   className="w-12 h-12 rounded-full object-cover"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement
+                    target.src = '/default.jpg'
+                  }}
                 />
               </div>
 
@@ -143,13 +146,13 @@ export function ActiveChats() {
         </div>
       )}
 
-      {matches.length > 0 && (
+      {activeChatsCount > 0 && (
         <Button
           variant="outline"
           className="w-full mt-4 border-white/20 hover:border-[#FF0059]/50 bg-white/5 hover:bg-white/10 text-sm"
           onClick={() => router.push('/matches')}
         >
-          View All Conversations
+          View All Matches
         </Button>
       )}
     </motion.div>

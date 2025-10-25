@@ -286,6 +286,12 @@ export const api = {
   getRecentMatches: () =>
     apiRequest('/api/match/recent'),
 
+  getAcceptedMatches: (userId: string) =>
+    apiRequest(`/matchmaking/getAcceptedMatched?id=${userId}` ),
+
+  getUserDetails: (userId: number) =>
+    apiRequest(`/user/getuserdetails?id=${userId}`),
+
   // Chat
   sendMessage: (matchId: number, message: string) =>
     apiRequest('/api/chat/send', {

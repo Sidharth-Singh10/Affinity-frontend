@@ -25,6 +25,50 @@ export interface User {
   totalScore?: number
 }
 
+export interface AcceptedMatch {
+  id: number
+  male_id: number
+  female_id: number
+  status: 'ACCEPTED'
+}
+
+export interface UserDetails {
+  user_id: number
+  location: string
+  openness: string
+  interests: string
+  exp_qual: string
+  relation_type: string
+  social_habits: string
+  past_relations: string
+  values: string
+  style: string
+  traits: string
+  commitment: string
+  resolution: string
+  image_url: string
+  bio: string
+  score: number
+}
+
+export interface Match {
+  match_id: number
+  user_id: number
+  name: string
+  age: number
+  location: string
+  image: string
+  bio: string
+  matched_at: string
+  compatibility: number
+  last_message?: string
+  last_message_at?: string
+  unread_count: number
+  interests?: string
+  relation_type?: string
+}
+
+
 export interface UserImage {
   id: number
   user_id: number
@@ -45,21 +89,6 @@ export interface MatchRequest {
   compatibility: number
   mutualFriends: number
   interests: string[]
-}
-
-export interface Match {
-  match_id: number
-  user_id: number
-  name: string
-  age: number
-  location: string
-  image: string
-  bio: string
-  matched_at: string
-  compatibility: number
-  last_message?: string
-  last_message_at?: string
-  unread_count: number
 }
 
 export interface DashboardStats {
@@ -445,18 +474,80 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       return
     }
 
+    const currentUserId = typeof window !== 'undefined' ? localStorage.getItem('user_id') : null
+    if (!currentUserId) {
+      logger.warn('Cannot fetch matches: no user ID')
+      return
+    }
+
     try {
-      logger.debug('Fetching matches...')
-      const response = await api.getRecentMatches()
-      if (response.data?.matches) {
-        setMatches(response.data.matches)
-        logger.debug('Matches fetched successfully:', response.data.matches.length)
-      } else if (response.error) {
-        logger.warn('Failed to fetch matches:', response.error)
+      logger.debug('Fetching accepted matches...')
+      const matchesResponse = await api.getAcceptedMatches(currentUserId)
+
+      if (matchesResponse.error || !matchesResponse.data) {
+        logger.warn('Failed to fetch matches:', matchesResponse.error)
         setMatches([])
-      } else {
-        setMatches([])
+        return
       }
+
+      const acceptedMatches = matchesResponse.data as AcceptedMatch[]
+      logger.debug('Accepted matches received:', acceptedMatches.length)
+
+      if (!Array.isArray(acceptedMatches) || acceptedMatches.length === 0) {
+        setMatches([])
+        return
+      }
+
+      // Fetch details for each matched user
+      const matchDetailsPromises = acceptedMatches.map(async (match) => {
+        // Determine the other user's ID
+        const otherUserId = match.male_id.toString() === currentUserId
+          ? match.female_id
+          : match.male_id
+
+        try {
+          // Fetch user details
+          const detailsResponse = await api.getUserDetails(otherUserId)
+
+          if (detailsResponse.error || !detailsResponse.data) {
+            logger.warn(`Failed to fetch details for user ${otherUserId}`)
+            return null
+          }
+
+          const userDetails = detailsResponse.data as UserDetails
+
+          // Fetch user profile for name and age
+          const profileResponse = await api.getProfile(otherUserId)
+          const profile = profileResponse.data
+
+          // Combine all data into Match format
+          return {
+            match_id: match.id,
+            user_id: otherUserId,
+            name: profile?.first_name && profile?.last_name
+              ? `${profile.first_name} ${profile.last_name}`
+              : 'Unknown',
+            age: profile?.age || 0,
+            location: userDetails.location || '',
+            image: userDetails.image_url || '/default.jpg',
+            bio: userDetails.bio || '',
+            matched_at: 'Recently', // Backend doesn't provide timestamp
+            compatibility: Math.round(userDetails.score || 0),
+            interests: userDetails.interests || '',
+            relation_type: userDetails.relation_type || '',
+            unread_count: 0, // Would need messages API
+          } as Match
+        } catch (error) {
+          logger.error(`Error fetching details for user ${otherUserId}:`, error)
+          return null
+        }
+      })
+
+      const matchDetails = await Promise.all(matchDetailsPromises)
+      const validMatches = matchDetails.filter((m): m is Match => m !== null)
+
+      logger.debug('Valid matches processed:', validMatches.length)
+      setMatches(validMatches)
     } catch (error) {
       logger.error('Error fetching matches:', error)
       setMatches([])

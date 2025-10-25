@@ -128,7 +128,7 @@ export interface AppContextType {
   stats: DashboardStats | null
   recommendations: Candidate[]
   currentFilters: RecommendationFilters
-  
+
   // Aliases for compatibility
   dashboardStats?: DashboardStats | null
   isInitialized?: boolean
@@ -202,12 +202,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     try {
       logger.debug('Fetching profile for user:', userId)
       const response = await api.getProfile(parseInt(userId))
-      
+
       if (response.error) {
         logger.error('Profile fetch error:', response.error)
         return null
       }
-      
+
       if (!response.data) {
         logger.error('Profile data is missing')
         return null
@@ -215,14 +215,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
       const profile = response.data
       logger.debug('Profile data received:', profile)
-      
+
       const email = localStorage.getItem('user_email') || ''
-      
+
       // Backend returns lowercase field names (id, name, age, etc.)
       return {
         id: userId,
         email,
-        name: profile.name || '',
+        name: profile.first_name + ' ' + profile.last_name || '',
         age: profile.age || 0,
         city: profile.city || '',
         gender: profile.gender || '',
@@ -255,14 +255,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       const token = response.data.token
       const user_id = response.data.user.id
       logger.log('Login successful, user_id:', user_id)
-      
+
       // Store authentication data using the helper function
       setAuth(token, user_id, email)
-      
+
       // Fetch full profile
       logger.log('Fetching user profile...')
       const profile = await fetchUserProfile(user_id.toString())
-      
+
       if (profile) {
         logger.log('Profile fetched successfully:', profile)
         localStorage.setItem('user_name', profile.name)
@@ -301,14 +301,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       // const token  = response.data.token
       // const user_id  = response.data.user.id 
       // logger.log('Signup successful, user_id:', user_id)
-      
+
       // // Store authentication data using the helper function
       // setAuth(token, user_id, userData.email, userData.name)
-      
+
       // // Fetch full profile (should include the data they just provided)
       // logger.log('Fetching new user profile...')
       // const profile = await fetchUserProfile(user_id.toString())
-      
+
       // if (profile) {
       //   logger.log('New user profile fetched:', profile)
       //   setUser(profile)
@@ -354,10 +354,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setUser(prev => {
       if (!prev) return null
       const updated = { ...prev, ...userData }
-      
+
       if (userData.name) localStorage.setItem('user_name', userData.name)
       if (userData.email) localStorage.setItem('user_email', userData.email)
-      
+
       return updated
     })
   }, [])
@@ -372,7 +372,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logger.warn('Cannot fetch profile: no user ID')
       return
     }
-    
+
     try {
       logger.debug('Fetching user profile...')
       const profile = await fetchUserProfile(userId)
@@ -390,10 +390,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logger.warn('Cannot fetch images: not authenticated')
       return
     }
-    
+    const userId = typeof window !== 'undefined' ? localStorage.getItem('user_id') : null
+    if (!userId) {
+      logger.warn('Cannot fetch profile: no user ID')
+      return
+    }
+
     try {
       logger.debug('Fetching user images...')
-      const response = await api.listUserImages()
+      console.log('LOOOOOOORA:', userId)
+      const response = await api.listUserImages(userId)
       if (response.data?.images) {
         setImages(response.data.images)
         logger.debug('Images fetched successfully:', response.data.images.length)
@@ -414,7 +420,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logger.warn('Cannot fetch match requests: not authenticated')
       return
     }
-    
+
     try {
       logger.debug('Fetching match requests...')
       const response = await api.getIncomingRequests()
@@ -438,7 +444,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logger.warn('Cannot fetch matches: not authenticated')
       return
     }
-    
+
     try {
       logger.debug('Fetching matches...')
       const response = await api.getRecentMatches()
@@ -462,7 +468,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logger.warn('Cannot fetch stats: not authenticated')
       return
     }
-    
+
     try {
       logger.debug('Fetching stats...')
       const response = await api.getDashboardStats()
@@ -486,13 +492,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logger.warn('Cannot fetch recommendations: not authenticated')
       return
     }
-    
+
     try {
       setError(null)
       logger.log('Fetching recommendations with filters:', filters)
-      
+
       const response = await api.getRecommendations(filters || { limit: 20, min_score: 50 })
-      
+
       if (response.error) {
         logger.error('Recommendations fetch error:', response.error)
         setError(response.error)
@@ -501,7 +507,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         }
         return
       }
-      
+
       if (response.data?.candidates && Array.isArray(response.data.candidates)) {
         logger.log('Recommendations received:', response.data.candidates.length)
         if (append) {
@@ -535,7 +541,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   const rejectUser = useCallback(async (userId: number) => {
     if (!isAuthenticated) return
-    
+
     try {
       const response = await api.rejectUser(userId)
       if (response.error) {
@@ -549,7 +555,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   const refreshAll = useCallback(async () => {
     if (!isAuthenticated) return
-    
+
     setIsLoading(true)
     try {
       await Promise.all([
@@ -587,22 +593,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const updateFilters = useCallback(async (filters: RecommendationFilters) => {
     logger.log('Updating recommendation filters:', filters)
     setCurrentFilters(filters)
-    
+
     // Immediately fetch recommendations with new filters
     if (isAuthenticated) {
       try {
         setError(null)
         logger.log('Fetching recommendations with new filters:', filters)
-        
+
         const response = await api.getRecommendations(filters || { limit: 20 })
-        
+
         if (response.error) {
           logger.error('Recommendations fetch error:', response.error)
           setError(response.error)
           setRecommendations([])
           return
         }
-        
+
         if (response.data?.candidates && Array.isArray(response.data.candidates)) {
           logger.log('Recommendations received:', response.data.candidates.length)
           setRecommendations(response.data.candidates)
@@ -633,7 +639,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       if (token && userId && userEmail) {
         logger.log('Found stored auth, fetching profile for user:', userId)
         const profile = await fetchUserProfile(userId)
-        
+
         if (profile) {
           logger.log('Profile restored from backend:', profile)
           setUser(profile)
@@ -648,7 +654,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       } else {
         logger.log('No stored authentication found')
       }
-      
+
       setIsLoading(false)
       setIsInitialized(true)
     }
@@ -659,7 +665,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   // Fetch data when authenticated (only once on mount after auth is confirmed)
   useEffect(() => {
     let isMounted = true
-    
+
     if (isAuthenticated && user?.id && isInitialized) {
       // Only fetch if we don't have data already
       const hasData = images.length > 0 || matches.length > 0 || matchRequests.length > 0
@@ -668,14 +674,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         const fetchData = async () => {
           try {
             if (!isMounted) return
-            
+
             await Promise.all([
               fetchImages(),
               fetchMatchRequests(),
               fetchMatches(),
               fetchStats(),
             ])
-            
+
             if (isMounted) {
               logger.log('Initial data fetch complete')
             }
@@ -691,7 +697,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         logger.log('Data already loaded, skipping fetch')
       }
     }
-    
+
     return () => {
       isMounted = false
     }
@@ -715,7 +721,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     stats,
     recommendations,
     currentFilters,
-    
+
     // Aliases for compatibility
     dashboardStats: stats,
     isInitialized,

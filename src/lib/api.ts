@@ -238,10 +238,10 @@ export const api = {
 
   // User Profile
   getProfile: (userId: number) =>
-    apiRequest(`/api/user/profile/${userId}`),
+    apiRequest(`/user/getuser?id=${userId}`),
 
   getUserImages: (userId: number) =>
-    apiRequest(`/api/user/images/${userId}`),
+    apiRequest(`/user/getuseravatar?id=${userId}`),
 
   // Chatbot Score
   submitScore: (scores: { personality: number; communication: number; emotional: number; confidence: number }) =>
@@ -312,8 +312,13 @@ export const api = {
       return { data: await res.json() }
     }),
 
-  listUserImages: () =>
-    apiRequest('/api/user/images'),
+  listUserImages: (userId?: string) => {
+    if (!userId) {
+      console.warn('listUserImages called without userId')
+      throw new Error('Missing userId for listUserImages')
+    }
+    return apiRequest(`/user/getuseravatar?id=${encodeURIComponent(userId)}`)
+  },
 
   setPrimaryImage: (imageId: number) =>
     apiRequest(`/api/user/image/${imageId}/primary`, {

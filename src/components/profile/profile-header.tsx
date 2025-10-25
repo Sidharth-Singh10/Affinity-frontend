@@ -60,26 +60,27 @@ export function ProfileHeader({ userProfile }: ProfileHeaderProps) {
     const fetchPrimaryImage = async () => {
       setIsLoadingImage(true)
       try {
-        const response = await api.listUserImages()
-        if (response.data?.images && Array.isArray(response.data.images)) {
-          const images: UserImage[] = response.data.images
-          const primary = images.find(img => img.is_primary)
-          if (primary?.image_url) {
-            setPrimaryImage(primary.image_url)
-          } else if (images.length > 0 && images[0].image_url) {
-            // Use first image if no primary is set
-            setPrimaryImage(images[0].image_url)
-          }
+        const response = await api.listUserImages(user?.id)
+
+        // If the API returns a plain string URL
+        const imageUrl = typeof response.data === "string" ? response.data : null
+
+        if (imageUrl) {
+          setPrimaryImage(imageUrl)
+        } else {
+          setPrimaryImage("/default.jpg")
         }
       } catch (err) {
-        console.error("Failed to fetch primary image:", err)
+        console.error("Failed to fetch user image:", err)
+        setPrimaryImage("/default.jpg")
       } finally {
         setIsLoadingImage(false)
       }
     }
 
-    fetchPrimaryImage()
-  }, [])
+    if (user?.id) fetchPrimaryImage()
+  }, [user?.id])
+
 
   return (
     <motion.div
@@ -102,17 +103,17 @@ export function ProfileHeader({ userProfile }: ProfileHeaderProps) {
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#FF0059]"></div>
                 </div>
               ) : (
-                <Image 
-                  width={160} 
-                  height={160} 
-                  src={primaryImage} 
-                  alt="Profile" 
+                <Image
+                  width={160}
+                  height={160}
+                  src={primaryImage}
+                  alt="Profile"
                   className="w-full h-full object-cover"
                   onError={() => setPrimaryImage("/default.jpg")}
                 />
               )}
             </div>
-            <button 
+            <button
               className="absolute bottom-2 right-2 w-10 h-10 bg-[#FF0059] hover:bg-[#FF0059]/90 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 shadow-lg shadow-[#FF0059]/25"
               title="Upload profile photo"
               onClick={() => {
@@ -188,9 +189,9 @@ export function ProfileHeader({ userProfile }: ProfileHeaderProps) {
                 </>
               ) : (
                 <>
-                  Gender: {displayGender === 'M' ? 'Male' : displayGender === 'F' ? 'Female' : 'Not specified'} | 
-                  Total Score: {displayTotalScore} | 
-                  Passionate about connecting with like-minded individuals and building meaningful relationships. 
+                  Gender: {displayGender === 'M' ? 'Male' : displayGender === 'F' ? 'Female' : 'Not specified'} |
+                  Total Score: {displayTotalScore} |
+                  Passionate about connecting with like-minded individuals and building meaningful relationships.
                   When I'm not working, you'll find me exploring new places and trying new experiences around the city.
                 </>
               )}

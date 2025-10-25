@@ -32,28 +32,27 @@ export function DashboardNav() {
     const fetchPrimaryImage = async () => {
       setIsLoadingImage(true)
       try {
-        const response = await api.listUserImages()
-        if (response.data?.images && Array.isArray(response.data.images)) {
-          const images = response.data.images
-          const primary = images.find((img: any) => img.is_primary)
-          if (primary?.image_url) {
-            setPrimaryImage(primary.image_url)
-          } else if (images.length > 0 && images[0].image_url) {
-            setPrimaryImage(images[0].image_url)
-          }
+        const response = await api.listUserImages(user?.id)
+
+        const imageUrl = typeof response.data === "string" ? response.data : null
+
+        if (imageUrl) {
+          setPrimaryImage(imageUrl)
+        } else {
+          setPrimaryImage("/default.jpg")
         }
       } catch (err) {
         console.error("Failed to fetch primary image:", err)
+        setPrimaryImage("/default.jpg")
       } finally {
         setIsLoadingImage(false)
       }
     }
 
-    if (user) {
+    if (user?.id) {
       fetchPrimaryImage()
     }
-  }, [user])
-
+  }, [user?.id])
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -93,11 +92,10 @@ export function DashboardNav() {
                 <Link
                   key={item.name}
                   href={item.href}
-                  className={`relative flex items-center space-x-2 px-4 py-2 rounded-xl transition-all duration-300 group ${
-                    isActive
+                  className={`relative flex items-center space-x-2 px-4 py-2 rounded-xl transition-all duration-300 group ${isActive
                       ? "bg-[#FF0059]/20 text-[#FF0059] border border-[#FF0059]/30"
                       : "text-white/70 hover:text-white hover:bg-white/10"
-                  }`}
+                    }`}
                 >
                   <item.icon
                     className={`h-5 w-5 transition-transform group-hover:scale-110 ${isActive ? "text-[#FF0059]" : ""}`}
@@ -175,7 +173,7 @@ export function DashboardNav() {
                       </div>
                     </div>
                   </div>
-                  
+
                   <div className="p-2">
                     <Link
                       href="/profile"
@@ -231,9 +229,8 @@ export function DashboardNav() {
               <Link
                 key={item.name}
                 href={item.href}
-                className={`flex flex-col items-center space-y-1 p-3 rounded-xl transition-all duration-300 ${
-                  isActive ? "bg-[#FF0059]/20 text-[#FF0059]" : "text-white/70 hover:text-white hover:bg-white/10"
-                }`}
+                className={`flex flex-col items-center space-y-1 p-3 rounded-xl transition-all duration-300 ${isActive ? "bg-[#FF0059]/20 text-[#FF0059]" : "text-white/70 hover:text-white hover:bg-white/10"
+                  }`}
               >
                 <item.icon className="h-5 w-5" />
                 <span className="text-xs font-medium">{item.name}</span>

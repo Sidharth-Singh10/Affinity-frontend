@@ -13,6 +13,7 @@ export interface User {
   id: string
   email: string
   name: string
+  username?: string
   age?: number
   city?: string
   gender?: string
@@ -54,6 +55,7 @@ export interface UserDetails {
 export interface Match {
   match_id: number
   user_id: number
+  other_user?: User
   name: string
   age: number
   location: string
@@ -157,6 +159,7 @@ export interface AppContextType {
   stats: DashboardStats | null
   recommendations: Candidate[]
   currentFilters: RecommendationFilters
+  currentChat: Match | null
 
   // Aliases for compatibility
   dashboardStats?: DashboardStats | null
@@ -186,6 +189,7 @@ export interface AppContextType {
   removeMatchRequest: (senderId: number) => void
   addMatch: (match: Match) => void
   removeRecommendation: (userId: number) => void
+  updateCurrentChat: (chat: Match) => void
 }
 
 // ============================================================================
@@ -221,6 +225,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [currentFilters, setCurrentFilters] = useState<RecommendationFilters>({ limit: 10 })
   const [error, setError] = useState<string | null>(null)
 
+  // Chat data
+  const [currentChat, setCurrentChat] = useState<Match | null>(null)
+  // Chat methods
+  const updateCurrentChat = useCallback((chat: Match) => {
+    setCurrentChat(chat)
+  }, [])
+
+
   const isAuthenticated = !!user
 
   // ============================================================================
@@ -252,6 +264,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         id: userId,
         email,
         name: profile.first_name + ' ' + profile.last_name || '',
+        username: profile.username || '',
         age: profile.age || 0,
         city: profile.city || '',
         gender: profile.gender || '',
@@ -327,34 +340,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return { success: false, error: response.error || 'Signup failed' }
       }
 
-      // const token  = response.data.token
-      // const user_id  = response.data.user.id 
-      // logger.log('Signup successful, user_id:', user_id)
-
-      // // Store authentication data using the helper function
-      // setAuth(token, user_id, userData.email, userData.name)
-
-      // // Fetch full profile (should include the data they just provided)
-      // logger.log('Fetching new user profile...')
-      // const profile = await fetchUserProfile(user_id.toString())
-
-      // if (profile) {
-      //   logger.log('New user profile fetched:', profile)
-      //   setUser(profile)
-      //   toast.success('Welcome!', `Account created successfully`)
-      // } else {
-      //   logger.warn('Profile fetch failed after signup, using provided data')
-      //   // Use the data they provided during signup
-      //   setUser({ 
-      //     id: user_id.toString(), 
-      //     email: userData.email, 
-      //     name: userData.name,
-      //     age: userData.age,
-      //     city: userData.city,
-      //     gender: userData.gender
-      //   })
-      //   toast.success('Welcome!', 'Account created successfully')
-      // }
 
       return { success: true }
     } catch (error) {
@@ -817,6 +802,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     dashboardStats: stats,
     isInitialized,
     error,
+
+    // Chat stuff 
+    currentChat,
+    updateCurrentChat,
 
     // Auth Methods
     login,

@@ -14,6 +14,7 @@ export function MatchesList() {
   const { matches, isLoading, fetchMatches } = useApp()
   const [localLoading, setLocalLoading] = useState(true)
 
+  // calls api each time we load the component, look for better ways to do this later
   useEffect(() => {
     const loadMatches = async () => {
       setLocalLoading(true)
@@ -22,7 +23,8 @@ export function MatchesList() {
     }
 
     loadMatches()
-  }, [])
+  }, [fetchMatches])
+
 
   const handleChatClick = (matchId: number, userId: number) => {
     // Navigate to chat with match

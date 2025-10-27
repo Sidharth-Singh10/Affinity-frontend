@@ -5,7 +5,6 @@ import MessageBox from "./MessageBox";
 import ChatHeader from "./ChatHeader";
 import { useWebSocket } from "@/contexts/peroxo-context";
 import useMessageCache from "@/hooks/use-messageCache";
-import { log } from "console";
 import { logger } from "@/lib/logger";
 import { useApp } from "@/contexts/app-context";
 const ChatBox = () => {
@@ -24,6 +23,15 @@ const ChatBox = () => {
             Number(currentChat.user_id)
         )}`
         : null;
+        
+    if (!currentChat) {
+        return (
+            <div className="flex items-center justify-center h-full text-gray-500">
+                Select a chat to start messaging.
+            </div>
+        );
+    }
+    console.log("ChatBox - chatId:", chatId);
 
     if (!chatId) {
         logger.error("Chat ID could not be determined in ChatBox");

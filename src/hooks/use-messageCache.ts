@@ -7,7 +7,7 @@ import {
 import { useApp } from "@/contexts/app-context";
 import { useWebSocket } from "@/contexts/peroxo-context";
 import { logger } from "@/lib/logger";
-import { ChatMessage, messageCache } from "@/lib/message-cache"; // Adjust import path as needed
+import { ChatMessage, getMessageCache } from "@/lib/message-cache"; // Adjust import path as needed
 
 
 interface UseMessageCacheResult {
@@ -48,6 +48,7 @@ interface UseMultipleChatCacheResult {
 // ===== Hook: useMessageCache =====
 
 export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
+    const messageCache = getMessageCache();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
     const [failedMessages, setFailedMessages] = useState<ChatMessage[]>([]);
@@ -332,6 +333,7 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
 export const useMultipleChatCache = (
     chatIds: string[] = []
 ): UseMultipleChatCacheResult => {
+    const messageCache = getMessageCache();
     const [cacheStats, setCacheStats] = useState<Record<string, any>>({});
     const [isInitialized, setIsInitialized] = useState(false);
 

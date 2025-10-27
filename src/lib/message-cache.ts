@@ -42,6 +42,10 @@ interface CacheStats {
   newestChat: Date | null;
 }
 
+function isBrowser(): boolean {
+  return typeof window !== "undefined" && typeof localStorage !== "undefined";
+}
+
 export class MessageCache {
   private options: Required<MessageCacheOptions>;
   private memoryCache: Map<string, ChatData>;
@@ -63,6 +67,7 @@ export class MessageCache {
 
   // Initialize cache from localStorage
   private initialize(): void {
+    if (!isBrowser()) return;
     try {
       const metadata = this.getFromStorage<Record<string, ChatMetadata>>("chat_metadata");
       if (metadata) {
@@ -275,6 +280,7 @@ export class MessageCache {
   }
 
   private getFromStorage<T>(key: string): T | null {
+    if (!isBrowser()) return null;
     try {
       const item = localStorage.getItem(`msgcache_${key}`);
       return item ? (JSON.parse(item) as T) : null;
@@ -285,6 +291,7 @@ export class MessageCache {
   }
 
   private setToStorage(key: string, value: unknown): void {
+    if (!isBrowser()) return;
     try {
       localStorage.setItem(`msgcache_${key}`, JSON.stringify(value));
     } catch (error: any) {
@@ -294,6 +301,7 @@ export class MessageCache {
   }
 
   private isStorageQuotaExceeded(): boolean {
+    if (!isBrowser()) return false;
     try {
       let totalSize = 0;
       for (let key in localStorage) {
@@ -337,6 +345,7 @@ export class MessageCache {
   }
 
   private removeChatFromStorage(chatId: string): void {
+    if (!isBrowser()) return;
     try {
       localStorage.removeItem(`msgcache_chat_${chatId}`);
       this.chatMetadata.delete(chatId);
@@ -347,6 +356,7 @@ export class MessageCache {
   }
 
   private clearCorruptedData(): void {
+    if (!isBrowser()) return;
     console.warn("Clearing corrupted cache data");
     this.memoryCache.clear();
     this.chatMetadata.clear();
@@ -369,6 +379,7 @@ export class MessageCache {
   }
 
   private getStorageUsage(): { bytes: number; mb: string } {
+    if (!isBrowser()) return { bytes: 0, mb: "0.00" };
     try {
       let totalSize = 0;
       for (let key in localStorage) {
@@ -414,11 +425,25 @@ export class MessageCache {
 }
 
 // Export singleton
-export const messageCache = new MessageCache({
-  maxMessagesPerChat: 100,
-  maxCachedChats: 30,
-  maxStorageSizeMB: 3,
-  cleanupThresholdDays: 30,
-});
+let messageCacheInstance: MessageCache | null = null;
 
+export function getMessageCache(): MessageCache {
+  if (!messageCacheInstance) {
+    // only create it on the client
+    if (isBrowser()) {
+      messageCacheInstance = new MessageCache({
+        maxMessagesPerChat: 100,
+        maxCachedChats: 30,
+        maxStorageSizeMB: 3,
+        cleanupThresholdDays: 30,
+      });
+    } else {
+      // return a dummy placeholder on SSR
+      messageCacheInstance = new MessageCache({});
+    }
+  }
+  return messageCacheInstance;
+}
+
+// Default export stays same
 export default MessageCache;

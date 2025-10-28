@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+'use client'
 import React, {
     createContext,
     useContext,
@@ -57,7 +57,9 @@ export const PeroxoWebSocketProvider: React.FC<PeroxoWebSocketProviderProps> = (
     children,
 }) => {
     const { user } = useApp();
-    const token = getAuthToken();
+    // const token = getAuthToken();
+    const token = localStorage.getItem('auth_token')
+
 
     const prevTokenRef = useRef<string | null>();
     useEffect(() => {
@@ -181,8 +183,14 @@ export const PeroxoWebSocketProvider: React.FC<PeroxoWebSocketProviderProps> = (
             setConnectionStatus("connecting");
             setError(null);
 
+            const userId = user?.id || localStorage.getItem('user_id');
+            if (!userId) {
+                console.log("User not available yet, waiting to connect...");
+                return;
+            }
+
             try {
-                const wsUrl = `${PEROXO_SOCKET_URL}/ws?token=${user?.id}`;
+                const wsUrl = `${PEROXO_SOCKET_URL}/ws?token=${userId}`;
                 console.log("Connecting to WebSocket:", wsUrl);
 
                 currentSocket = new WebSocket(wsUrl);

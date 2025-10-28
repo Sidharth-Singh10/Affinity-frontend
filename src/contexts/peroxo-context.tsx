@@ -1,22 +1,13 @@
-'use client'
+'use client';
 import React, {
-    createContext,
-    useContext,
-    useEffect,
-    useRef,
-    useState,
-    useCallback,
-    ReactNode,
-} from "react";
-import { useApp } from "./app-context";
-import { getAuthToken } from "@/lib/api";
+    createContext, useContext, useEffect, useRef, useState,
+    useCallback, ReactNode
+} from 'react';
+import { useApp } from './app-context';
 
-const PEROXO_SOCKET_URL =
-    process.env.NEXT_PUBLIC_PEROXO_SOCKET_URL || "ws://localhost:4001";
+const PEROXO_SOCKET_URL = process.env.NEXT_PUBLIC_PEROXO_SOCKET_URL || 'ws://localhost:4001';
 
-/** ---- TYPES ---- **/
-
-type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 interface WebSocketContextType {
     connectionStatus: ConnectionStatus;
@@ -30,335 +21,236 @@ interface WebSocketContextType {
     disconnect: () => void;
     reconnect: () => void;
     addMessageHandler: (handler: (message: any) => void) => () => void;
-    addConnectionHandler: (
-        handler: (status: ConnectionStatus, event?: CloseEvent | Event) => void
-    ) => () => void;
+    addConnectionHandler: (handler: (status: ConnectionStatus, event?: CloseEvent | Event) => void) => () => void;
 }
 
-interface PeroxoWebSocketProviderProps {
-    children: ReactNode;
-}
-
-/** ---- CONTEXT ---- **/
+interface PeroxoWebSocketProviderProps { children: ReactNode; }
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
 
 export const useWebSocket = (): WebSocketContextType => {
-    const context = useContext(WebSocketContext);
-    if (!context) {
-        throw new Error("useWebSockgetOnlineUserset must be used within a WebSocketProvider");
-    }
-    return context;
+    const ctx = useContext(WebSocketContext);
+    if (!ctx) throw new Error('useWebSocket must be used within a WebSocketProvider');
+    return ctx;
 };
 
-/** ---- PROVIDER COMPONENT ---- **/
-
-export const PeroxoWebSocketProvider: React.FC<PeroxoWebSocketProviderProps> = ({
-    children,
-}) => {
+export const PeroxoWebSocketProvider: React.FC<PeroxoWebSocketProviderProps> = ({ children }) => {
     const { user } = useApp();
-    // const token = getAuthToken();
-    const token = localStorage.getItem('auth_token')
 
-
-    const prevTokenRef = useRef<string | null>();
+    // Keep user_id stable and react to cross-tab changes
+    const [userId, setUserId] = useState<string | null>(null);
     useEffect(() => {
-        if (prevTokenRef.current !== token) {
-            console.log("PeroxoWebSocketProvider token changed:", token);
-            prevTokenRef.current = token;
-        }
-    }, [token]);
+        const id = user?.id ?? (typeof window !== 'undefined' ? localStorage.getItem('user_id') : null);
+        setUserId(id ?? null);
+        const onStorage = (e: StorageEvent) => {
+            if (e.key === 'user_id') setUserId(e.newValue);
+        };
+        window.addEventListener('storage', onStorage);
+        return () => window.removeEventListener('storage', onStorage);
+    }, [user?.id]);
 
-    const [connectionStatus, setConnectionStatus] =
-        useState<ConnectionStatus>("disconnected");
+    const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
     const [error, setError] = useState<string | null>(null);
     const [reconnectAttempts, setReconnectAttempts] = useState(0);
 
     const socketRef = useRef<WebSocket | null>(null);
-    const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-        null
-    );
-    const messageHandlersRef = useRef<Set<(message: any) => void>>(new Set());
-    const connectionHandlersRef = useRef<
-        Set<(status: ConnectionStatus, event?: CloseEvent | Event) => void>
-    >(new Set());
+    const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const manualCloseRef = useRef(false);
+
+    const messageHandlersRef = useRef(new Set<(message: any) => void>());
+    const connectionHandlersRef = useRef(new Set<(status: ConnectionStatus, event?: CloseEvent | Event) => void>());
 
     const MAX_RECONNECT_ATTEMPTS = 5;
-    const RECONNECT_INTERVAL = 3000;
+    const BASE_RECONNECT_INTERVAL = 1500;
 
-    /** ---- CLEANUP ---- **/
-    const cleanup = useCallback(() => {
+    const safeClearTimer = () => {
         if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
             reconnectTimeoutRef.current = null;
         }
+    };
 
-        if (socketRef.current) {
-            socketRef.current.onopen = null;
-            socketRef.current.onclose = null;
-            socketRef.current.onerror = null;
-            socketRef.current.onmessage = null;
+    const hardCloseSocket = () => {
+        const s = socketRef.current;
+        if (!s) return;
+        s.onopen = null;
+        s.onclose = null;
+        s.onerror = null;
+        s.onmessage = null;
+        try { s.close(); } catch { }
+        socketRef.current = null;
+    };
 
-            if (socketRef.current.readyState === WebSocket.OPEN) {
-                socketRef.current.close();
-            }
-            socketRef.current = null;
-        }
+    const cleanup = useCallback(() => {
+        safeClearTimer();
+        hardCloseSocket();
     }, []);
 
-    /** ---- SEND MESSAGE ---- **/
-    const sendMessage = useCallback((message: string | object): boolean => {
-        if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-            throw new Error("WebSocket is not connected");
+    const notifyConnectionHandlers = (status: ConnectionStatus, evt?: CloseEvent | Event) => {
+        for (const h of connectionHandlersRef.current) {
+            try { h(status, evt); } catch (e) { console.error('Error in connection handler:', e); }
         }
+    };
+
+    const sendMessage = useCallback((message: string | object): boolean => {
+        const s = socketRef.current;
+        if (!s || s.readyState !== WebSocket.OPEN) throw new Error('WebSocket is not connected');
+        s.send(typeof message === 'string' ? message : JSON.stringify(message));
+        return true;
+    }, []);
+
+    const addMessageHandler = useCallback((handler: (message: any) => void) => {
+        messageHandlersRef.current.add(handler);
+        return () => { messageHandlersRef.current.delete(handler); };
+    }, []);
+
+    const addConnectionHandler = useCallback((handler: (status: ConnectionStatus, event?: CloseEvent | Event) => void) => {
+        connectionHandlersRef.current.add(handler);
+        return () => { connectionHandlersRef.current.delete(handler); };
+    }, []);
+
+    // Core single-flight connect using token = user_id
+    const connectOnce = useCallback(() => {
+        const authKey = userId ? String(userId) : null;
+        if (!authKey) {
+            setConnectionStatus('disconnected');
+            setError('User ID is required for connection');
+            return;
+        }
+
+        // prevent duplicate connects if OPEN or CONNECTING
+        const existing = socketRef.current;
+        if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+
+        manualCloseRef.current = false;
+        cleanup();
+        setConnectionStatus('connecting');
+        setError(null);
 
         try {
-            const messageStr =
-                typeof message === "string" ? message : JSON.stringify(message);
-            socketRef.current.send(messageStr);
-            return true;
-        } catch (err) {
-            console.error("Failed to send message:", err);
-            throw err;
+            const wsUrl = `${PEROXO_SOCKET_URL.replace(/\/$/, '')}/ws?token=${encodeURIComponent(authKey)}`;
+            const ws = new WebSocket(wsUrl);
+            socketRef.current = ws;
+
+            ws.onopen = () => {
+                setConnectionStatus('connected');
+                setReconnectAttempts(0);
+                setError(null);
+                notifyConnectionHandlers('connected');
+            };
+
+            ws.onmessage = (evt: MessageEvent) => {
+                try {
+                    const msg = JSON.parse(evt.data);
+                    for (const h of messageHandlersRef.current) {
+                        try { h(msg); } catch (e) { console.error('Error in message handler:', e); }
+                    }
+                } catch (e) {
+                    console.error('Failed to parse WebSocket message:', e);
+                }
+            };
+
+            ws.onerror = (evt) => {
+                console.error('WebSocket error:', evt);
+                setError('WebSocket connection error');
+                setConnectionStatus('error');
+                notifyConnectionHandlers('error', evt);
+            };
+
+            ws.onclose = (evt: CloseEvent) => {
+                socketRef.current = null;
+                setConnectionStatus('disconnected');
+                notifyConnectionHandlers('disconnected', evt);
+
+                if (manualCloseRef.current || evt.code === 1000) return;         // no auto-reconnect on manual/normal close
+                if (!authKey) return;                                            // no creds → no reconnect
+
+                setReconnectAttempts(prev => {
+                    const next = prev + 1;
+                    if (next <= MAX_RECONNECT_ATTEMPTS) {
+                        const delay = BASE_RECONNECT_INTERVAL * Math.pow(2, prev);
+                        reconnectTimeoutRef.current = setTimeout(() => {
+                            if (socketRef.current == null && !manualCloseRef.current) connectOnce();
+                        }, delay);
+                    } else {
+                        setError('Maximum reconnection attempts reached');
+                    }
+                    return next;
+                });
+            };
+        } catch (e) {
+            console.error('Failed to create WebSocket connection:', e);
+            setError('Failed to create WebSocket connection');
+            setConnectionStatus('error');
         }
-    }, []);
+    }, [userId, cleanup]);
 
-    /** ---- HANDLERS ---- **/
-    const addMessageHandler = useCallback(
-        (handler: (message: any) => void) => {
-            messageHandlersRef.current.add(handler);
-            return () => {
-                messageHandlersRef.current.delete(handler);
-            };
-        },
-        []
-    );
+    // Auto-connect when userId is available
+    useEffect(() => {
+        if (!userId) {
+            cleanup();
+            setConnectionStatus('disconnected');
+            setReconnectAttempts(0);
+            return;
+        }
+        if (connectionStatus === 'disconnected') {
+            connectOnce();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [userId]); // keep lean to avoid loops
 
-    const addConnectionHandler = useCallback(
-        (handler: (status: ConnectionStatus, event?: CloseEvent | Event) => void) => {
-            connectionHandlersRef.current.add(handler);
-            return () => {
-                connectionHandlersRef.current.delete(handler);
-            };
-        },
-        []
-    );
-
-    /** ---- DISCONNECT ---- **/
     const disconnect = useCallback(() => {
+        manualCloseRef.current = true; // suppress auto-reconnect
         cleanup();
-        setConnectionStatus("disconnected");
+        setConnectionStatus('disconnected');
         setReconnectAttempts(0);
     }, [cleanup]);
 
-    /** ---- MAIN CONNECTION EFFECT ---- **/
-    useEffect(() => {
-        let currentSocket: WebSocket | null = null;
-        let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-
-        const connectToWebSocket = () => {
-            if (!token && !user?.id) {
-                console.log("Token not available, skipping connection");
-                setConnectionStatus("disconnected");
-                setError("Token is required for connection");
-                return;
-            }
-
-            // Clean up existing connection
-            if (currentSocket) {
-                currentSocket.onopen = null;
-                currentSocket.onclose = null;
-                currentSocket.onerror = null;
-                currentSocket.onmessage = null;
-                if (currentSocket.readyState === WebSocket.OPEN) {
-                    currentSocket.close();
-                }
-            }
-
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = null;
-            }
-
-            setConnectionStatus("connecting");
-            setError(null);
-
-            const userId = user?.id || localStorage.getItem('user_id');
-            if (!userId) {
-                console.log("User not available yet, waiting to connect...");
-                return;
-            }
-
-            try {
-                const wsUrl = `${PEROXO_SOCKET_URL}/ws?token=${userId}`;
-                console.log("Connecting to WebSocket:", wsUrl);
-
-                currentSocket = new WebSocket(wsUrl);
-                socketRef.current = currentSocket;
-
-                currentSocket.onopen = () => {
-                    console.log("WebSocket connected");
-                    setConnectionStatus("connected");
-                    setReconnectAttempts(0);
-                    setError(null);
-
-                    connectionHandlersRef.current.forEach((handler) => {
-                        try {
-                            handler("connected");
-                        } catch (e) {
-                            console.error("Error in connection handler:", e);
-                        }
-                    });
-                };
-
-                currentSocket.onclose = (event) => {
-                    console.log("WebSocket disconnected:", event.code, event.reason);
-                    setConnectionStatus("disconnected");
-
-                    connectionHandlersRef.current.forEach((handler) => {
-                        try {
-                            handler("disconnected", event);
-                        } catch (e) {
-                            console.error("Error in connection handler:", e);
-                        }
-                    });
-
-                    if (event.code !== 1000 && token) {
-                        setReconnectAttempts((prev) => {
-                            const newAttempts = prev + 1;
-                            if (newAttempts <= MAX_RECONNECT_ATTEMPTS) {
-                                console.log(
-                                    `Scheduling reconnect attempt ${newAttempts}/${MAX_RECONNECT_ATTEMPTS}`
-                                );
-                                reconnectTimeout = setTimeout(() => {
-                                    connectToWebSocket();
-                                }, RECONNECT_INTERVAL * Math.pow(2, prev));
-                            } else {
-                                setError("Maximum reconnection attempts reached");
-                            }
-                            return newAttempts;
-                        });
-                    }
-                };
-
-                currentSocket.onerror = (event) => {
-                    console.error("WebSocket error:", event);
-                    setError("WebSocket connection error");
-                    setConnectionStatus("disconnected");
-
-                    connectionHandlersRef.current.forEach((handler) => {
-                        try {
-                            handler("error", event);
-                        } catch (e) {
-                            console.error("Error in connection handler:", e);
-                        }
-                    });
-                };
-
-                currentSocket.onmessage = (event: MessageEvent) => {
-                    try {
-                        const message = JSON.parse(event.data);
-                        messageHandlersRef.current.forEach((handler) => {
-                            try {
-                                handler(message);
-                            } catch (e) {
-                                console.error("Error in message handler:", e);
-                            }
-                        });
-                    } catch (err) {
-                        console.error("Failed to parse WebSocket message:", err);
-                    }
-                };
-            } catch (err) {
-                console.error("Failed to create WebSocket connection:", err);
-                setError("Failed to create WebSocket connection");
-                setConnectionStatus("disconnected");
-            }
-        };
-
-        if (token) {
-            console.log("Token available, connecting to WebSocket");
-            connectToWebSocket();
-        } else {
-            console.log("No token available, disconnecting WebSocket");
-            if (socketRef.current) {
-                socketRef.current.close();
-            }
-
-            setConnectionStatus("disconnected");
-            setReconnectAttempts(0);
-        }
-
-        return () => {
-            if (reconnectTimeout) clearTimeout(reconnectTimeout);
-            if (currentSocket) {
-                currentSocket.onopen = null;
-                currentSocket.onclose = null;
-                currentSocket.onerror = null;
-                currentSocket.onmessage = null;
-                if (currentSocket.readyState === WebSocket.OPEN) {
-                    currentSocket.close();
-                }
-            }
-        };
-    }, [token, user?.id]);
-
-    /** ---- MANUAL RECONNECT ---- **/
     const reconnect = useCallback(() => {
+        manualCloseRef.current = false;
+        cleanup();
         setReconnectAttempts(0);
-    }, []);
+        setConnectionStatus('disconnected');
+        connectOnce();
+    }, [cleanup, connectOnce]);
 
     const connect = useCallback(() => {
-        if (token) {
-            setReconnectAttempts(0);
-        }
-    }, [token]);
+        if (connectionStatus === 'disconnected') connectOnce();
+    }, [connectionStatus, connectOnce]);
 
-    /** ---- VISIBILITY / ONLINE HANDLERS ---- **/
+    // Visibility / online handlers
     useEffect(() => {
-        const handleVisibilityChange = () => {
-            if (
-                document.visibilityState === "visible" &&
-                connectionStatus === "disconnected" &&
-                token
-            ) {
+        const onVisible = () => {
+            if (document.visibilityState === 'visible' && connectionStatus === 'disconnected' && userId) {
                 reconnect();
             }
         };
-
-        document.addEventListener("visibilitychange", handleVisibilityChange);
+        const onOnline = () => {
+            if (connectionStatus === 'disconnected' && userId) reconnect();
+        };
+        const onOffline = () => {
+            setConnectionStatus('disconnected');
+            cleanup();
+        };
+        document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('online', onOnline);
+        window.addEventListener('offline', onOffline);
         return () => {
-            document.removeEventListener("visibilitychange", handleVisibilityChange);
+            document.removeEventListener('visibilitychange', onVisible);
+            window.removeEventListener('online', onOnline);
+            window.removeEventListener('offline', onOffline);
         };
-    }, [connectionStatus, token, reconnect]);
+    }, [connectionStatus, userId, reconnect, cleanup]);
 
-    useEffect(() => {
-        const handleOnline = () => {
-            if (connectionStatus === "disconnected" && token) {
-                reconnect();
-            }
-        };
-        const handleOffline = () => {
-            setConnectionStatus("disconnected");
-        };
-
-        window.addEventListener("online", handleOnline);
-        window.addEventListener("offline", handleOffline);
-
-        return () => {
-            window.removeEventListener("online", handleOnline);
-            window.removeEventListener("offline", handleOffline);
-        };
-    }, [connectionStatus, token, reconnect]);
-
-    /** ---- CONTEXT VALUE ---- **/
-    const contextValue: WebSocketContextType = {
+    const value: WebSocketContextType = {
         connectionStatus,
         error,
         reconnectAttempts,
-        isConnected: connectionStatus === "connected",
-        isConnecting: connectionStatus === "connecting",
-        isDisconnected: connectionStatus === "disconnected",
+        isConnected: connectionStatus === 'connected',
+        isConnecting: connectionStatus === 'connecting',
+        isDisconnected: connectionStatus === 'disconnected',
         sendMessage,
         connect,
         disconnect,
@@ -367,9 +259,5 @@ export const PeroxoWebSocketProvider: React.FC<PeroxoWebSocketProviderProps> = (
         addConnectionHandler,
     };
 
-    return (
-        <WebSocketContext.Provider value={contextValue}>
-            {children}
-        </WebSocketContext.Provider>
-    );
+    return <WebSocketContext.Provider value={value}>{children}</WebSocketContext.Provider>;
 };

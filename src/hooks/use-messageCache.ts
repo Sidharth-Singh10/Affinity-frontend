@@ -3,6 +3,7 @@ import {
     useEffect,
     useCallback,
     useRef,
+    useMemo,
 } from "react";
 import { useApp } from "@/contexts/app-context";
 import { useWebSocket } from "@/contexts/peroxo-context";
@@ -150,10 +151,15 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                         logger.debug('Message already exists in state, skipping');
                         return prev;
                     }
-                    return [...prev, messageData];
+                    const newMessages = [...prev, messageData];
+                    logger.debug('State updated with new message. Total messages:', newMessages.length);
+                    return newMessages;
                 });
             } else {
-                logger.debug('Message not for current chat, UI not updated');
+                logger.debug('Message not for current chat, UI not updated', {
+                    derivedChatId,
+                    currentChatId: chatIdRef.current
+                });
             }
         });
 
@@ -344,7 +350,8 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
     );
 
     // ===== Computed message lists =====
-    const getAllMessages = useCallback((): ChatMessage[] => {
+    // Use useMemo instead of useCallback to ensure this recalculates when dependencies change
+    const allMessages = useMemo((): ChatMessage[] => {
         return [...messages, ...pendingMessages, ...failedMessages].sort(
             (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
         );
@@ -385,7 +392,7 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
         messages,
         pendingMessages,
         failedMessages,
-        allMessages: getAllMessages(),
+        allMessages,
         isLoading,
         error,
         addMessage,

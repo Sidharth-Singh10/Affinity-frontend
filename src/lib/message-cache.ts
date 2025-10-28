@@ -118,12 +118,23 @@ export class MessageCache {
     };
 
     let chatData =
-      this.memoryCache.get(chatId) || {
+      this.memoryCache.get(chatId) || this.loadChatFromStorage(chatId) || {
         chatId,
         messages: [],
         pendingMessages: [],
         failedMessages: [],
       };
+
+    // Check for duplicates in all arrays
+    const isDuplicate =
+      chatData.messages.some(m => m.id === messageWithTimestamp.id) ||
+      chatData.pendingMessages.some(m => m.id === messageWithTimestamp.id) ||
+      chatData.failedMessages.some(m => m.id === messageWithTimestamp.id);
+
+    if (isDuplicate) {
+      console.debug('Message already exists in cache:', messageWithTimestamp.id);
+      return true; // Return true since message is already there
+    }
 
     if (messageWithTimestamp.status === "pending") {
       chatData.pendingMessages.push(messageWithTimestamp);
@@ -155,7 +166,7 @@ export class MessageCache {
     newStatus: "sent" | "failed" | "pending",
     serverData: Partial<ChatMessage> = {}
   ): boolean {
-    const chatData = this.memoryCache.get(chatId);
+    const chatData = this.memoryCache.get(chatId) || this.loadChatFromStorage(chatId);
     if (!chatData) return false;
 
     const pendingIndex = chatData.pendingMessages.findIndex((m) => m.id === messageId);
@@ -180,8 +191,19 @@ export class MessageCache {
     pending: ChatMessage[];
     failed: ChatMessage[];
   } {
-    const chatData = this.memoryCache.get(chatId) || this.loadChatFromStorage(chatId);
-    if (!chatData) return { messages: [], pending: [], failed: [] };
+    // Always check memory cache first, then fall back to storage
+    let chatData = this.memoryCache.get(chatId);
+
+    if (!chatData) {
+      let chatData: ChatData | undefined = this.loadChatFromStorage(chatId) || undefined;
+      if (chatData) {
+        this.memoryCache.set(chatId, chatData);
+      }
+    }
+
+    if (!chatData) {
+      return { messages: [], pending: [], failed: [] };
+    }
 
     return {
       messages: chatData.messages || [],
@@ -200,7 +222,9 @@ export class MessageCache {
   public preloadChat(chatId: string): void {
     if (!this.memoryCache.has(chatId)) {
       const chatData = this.loadChatFromStorage(chatId);
-      if (chatData) this.memoryCache.set(chatId, chatData);
+      if (chatData) {
+        this.memoryCache.set(chatId, chatData);
+      }
     }
   }
 
@@ -232,7 +256,16 @@ export class MessageCache {
     try {
       const stored = this.getFromStorage<ChatData>(`chat_${chatId}`);
       if (stored) {
-        stored.messages = stored.messages.map((msg) => ({
+        // Ensure all message arrays exist and convert timestamps
+        stored.messages = (stored.messages || []).map((msg) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp!),
+        }));
+        stored.pendingMessages = (stored.pendingMessages || []).map((msg) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp!),
+        }));
+        stored.failedMessages = (stored.failedMessages || []).map((msg) => ({
           ...msg,
           timestamp: new Date(msg.timestamp!),
         }));

@@ -10,7 +10,7 @@ import { useApp } from "@/contexts/app-context";
 
 const ChatBox = () => {
     const { user, currentChat } = useApp();
-    const { sendMessage, isConnected } = useWebSocket();
+    const { sendMessage, isConnected,addMessageHandler } = useWebSocket();
 
     // Compute chatId with proper validation and type safety
     const chatId = useMemo(() => {
@@ -83,6 +83,39 @@ const ChatBox = () => {
             return () => clearTimeout(timer);
         }
     }, [chatId, allMessages.length, markAsRead]);
+
+    useEffect(() => {
+        if (!chatId) return;
+
+        const handleAck = (message: any) => {
+            // Check if this is a MessageAck
+            if (message.MessageAck) {
+                const { message_id, status } = message.MessageAck;
+
+                logger.debug('Received ack for message:', message_id, 'status:', status);
+
+                // Clear the timeout
+                const timeout = pendingAcksRef.current.get(message_id);
+                if (timeout) {
+                    clearTimeout(timeout);
+                    pendingAcksRef.current.delete(message_id);
+                }
+
+                // Update message status based on server response
+                if (status === 'Persisted') {
+                    updateMessageStatus(message_id, 'sent');
+                } else {
+                    // Handle other status types if needed
+                    updateMessageStatus(message_id, 'sent');
+                }
+            }
+        };
+
+        const unsubscribe = addMessageHandler(handleAck);
+        return unsubscribe;
+    }, [chatId, updateMessageStatus, addMessageHandler]);
+
+
 
     // Cleanup timeouts on unmount
     useEffect(() => {

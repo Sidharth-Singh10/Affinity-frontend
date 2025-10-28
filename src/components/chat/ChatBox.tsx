@@ -251,8 +251,6 @@ const ChatBox = () => {
             <div className="flex-shrink-0">
                 <ChatHeader
                     userInfo={currentChat.other_user}
-                    messageCounts={messageCounts}
-                    isLoading={isLoading}
                 />
             </div>
 

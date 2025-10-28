@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import MessageBox from "./MessageBox";
 import ChatHeader from "./ChatHeader";
@@ -7,37 +7,35 @@ import { useWebSocket } from "@/contexts/peroxo-context";
 import useMessageCache from "@/hooks/use-messageCache";
 import { logger } from "@/lib/logger";
 import { useApp } from "@/contexts/app-context";
-const ChatBox = () => {
 
-    const { user, currentChat } = useApp()
+const ChatBox = () => {
+    const { user, currentChat } = useApp();
     const { sendMessage, isConnected } = useWebSocket();
 
-    if (!user) {
-        logger.error("User not found in ChatBox");
-        return null;
-    }
+    // Compute chatId with proper validation and type safety
+    const chatId = useMemo(() => {
+        if (!user || !currentChat) {
+            logger.debug('Cannot derive chatId: missing user or currentChat');
+            return null;
+        }
 
-    const chatId = currentChat
-        ? `${Math.min(Number(user.id), Number(currentChat.user_id))}_${Math.max(
-            Number(user.id),
-            Number(currentChat.user_id)
-        )}`
-        : null;
-        
-    if (!currentChat) {
-        return (
-            <div className="flex items-center justify-center h-full text-gray-500">
-                Select a chat to start messaging.
-            </div>
-        );
-    }
-    console.log("ChatBox - chatId:", chatId);
+        // Normalize to string first
+        const userId = String(user.id);
+        const otherUserId = String(currentChat.user_id);
 
-    if (!chatId) {
-        logger.error("Chat ID could not be determined in ChatBox");
-        return null;
-    }
+        // Convert to numbers for comparison
+        const a = Number(userId);
+        const b = Number(otherUserId);
 
+        if (Number.isNaN(a) || Number.isNaN(b)) {
+            logger.error('Invalid user IDs for chat derivation', { userId, otherUserId });
+            return null;
+        }
+
+        const derivedId = `${Math.min(a, b)}_${Math.max(a, b)}`;
+        logger.debug('Derived chatId:', derivedId, 'from users:', userId, otherUserId);
+        return derivedId;
+    }, [user, currentChat]);
 
     const {
         failedMessages,
@@ -49,16 +47,22 @@ const ChatBox = () => {
         markAsRead,
         clearFromMemory,
         getMessageCounts,
-    } = useMessageCache(chatId);
+    } = useMessageCache(chatId ?? undefined);
 
     const [input, setInput] = useState("");
     const bottomRef = useRef<HTMLDivElement | null>(null);
     const previousChatIdRef = useRef<string | null>(null);
+    const pendingAcksRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
     // Clear memory when chat changes
     useEffect(() => {
         if (previousChatIdRef.current && previousChatIdRef.current !== chatId) {
+            logger.debug('Chat changed, clearing previous chat from memory');
             clearFromMemory();
+
+            // Clear any pending timeouts for the old chat
+            pendingAcksRef.current.forEach(timeout => clearTimeout(timeout));
+            pendingAcksRef.current.clear();
         }
         previousChatIdRef.current = chatId;
     }, [chatId, clearFromMemory]);
@@ -80,50 +84,82 @@ const ChatBox = () => {
         }
     }, [chatId, allMessages.length, markAsRead]);
 
+    // Cleanup timeouts on unmount
+    useEffect(() => {
+        return () => {
+            pendingAcksRef.current.forEach(timeout => clearTimeout(timeout));
+            pendingAcksRef.current.clear();
+        };
+    }, []);
+
     // Send new message
     const handleSend = (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
-        if (!input.trim() || !currentChat || !isConnected || !chatId) return;
+        if (!input.trim() || !currentChat || !isConnected || !chatId || !user) {
+            logger.warn('Cannot send message: missing required data', {
+                hasInput: !!input.trim(),
+                hasCurrentChat: !!currentChat,
+                isConnected,
+                hasChatId: !!chatId,
+                hasUser: !!user
+            });
+            return;
+        }
 
         const content = input.trim();
         const message_id = uuidv4();
         const now = new Date();
 
+        // Normalize IDs to strings
+        const fromId = String(user.id);
+        const toId = String(currentChat.user_id);
+
         const message = {
             id: message_id,
-            from: user.id,
-            to: String(currentChat.user_id),
+            from: fromId,
+            to: toId,
             content,
             incoming: false,
             timestamp: now,
             status: "sent" as const,
         };
 
+        logger.debug('Sending message:', message_id, 'to user:', toId);
         const success = addMessage(message);
 
         if (success) {
+            // Send to backend - normalize to numbers if backend expects numbers
             const payload = {
                 DirectMessage: {
-                    from: user.id,
-                    to: currentChat.user_id,
+                    from: Number(fromId),
+                    to: Number(toId),
                     content,
-                    message_id, // REQUIRED by backend
+                    message_id,
                 },
             };
+
+            logger.debug('WebSocket payload:', payload);
 
             try {
                 sendMessage(payload);
 
                 // Set a timeout to mark as failed if no ack
-                setTimeout(() => {
+                const timeout = setTimeout(() => {
+                    logger.warn('Message timeout - no ack received:', message_id);
                     updateMessageStatus(message_id, "failed");
+                    pendingAcksRef.current.delete(message_id);
                 }, 30000);
+
+                pendingAcksRef.current.set(message_id, timeout);
+
             } catch (err) {
-                console.error("WebSocket send error:", err);
+                logger.error("WebSocket send error:", err);
                 updateMessageStatus(message_id, "failed");
             }
 
             setInput("");
+        } else {
+            logger.error('Failed to add message to cache');
         }
     };
 
@@ -131,31 +167,53 @@ const ChatBox = () => {
     const handleRetry = useCallback(
         (messageId: string) => {
             const failedMessage = failedMessages.find((m) => m.id === messageId);
-            if (!failedMessage) return;
+            if (!failedMessage) {
+                logger.warn('Failed message not found:', messageId);
+                return;
+            }
 
-            // Set as pending
+            logger.debug('Retrying failed message:', messageId);
             updateMessageStatus(messageId, "pending");
 
-            // Resend with same message_id
             const payload = {
                 DirectMessage: {
-                    from: failedMessage.from,
-                    to: failedMessage.to,
+                    from: Number(failedMessage.from),
+                    to: Number(failedMessage.to),
                     content: failedMessage.content,
                     message_id: messageId,
                 },
             };
 
-            sendMessage(payload);
+            try {
+                sendMessage(payload);
 
-            setTimeout(() => {
+                const timeout = setTimeout(() => {
+                    logger.warn('Retry timeout - no ack received:', messageId);
+                    updateMessageStatus(messageId, "failed");
+                    pendingAcksRef.current.delete(messageId);
+                }, 30000);
+
+                pendingAcksRef.current.set(messageId, timeout);
+
+            } catch (err) {
+                logger.error("WebSocket retry error:", err);
                 updateMessageStatus(messageId, "failed");
-            }, 30000);
+            }
         },
         [failedMessages, updateMessageStatus, sendMessage]
     );
 
     const messageCounts = getMessageCounts();
+
+    // Validation checks
+    if (!user) {
+        logger.error("User not found in ChatBox");
+        return (
+            <div className="flex items-center justify-center h-full text-gray-500">
+                User not authenticated. Please log in.
+            </div>
+        );
+    }
 
     if (!currentChat) {
         return (
@@ -165,15 +223,24 @@ const ChatBox = () => {
         );
     }
 
-    if (error) {
+    if (!chatId) {
+        logger.error("Chat ID could not be determined in ChatBox");
         return (
             <div className="flex items-center justify-center h-full text-red-500">
-                Error loading messages: {error.message}
+                Error: Could not determine chat ID. Please refresh and try again.
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full text-red-500">
+                <p>Error loading messages: {error.message}</p>
                 <button
                     onClick={() => window.location.reload()}
-                    className="ml-2 px-2 py-1 bg-red-600 text-white rounded text-sm"
+                    className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
                 >
-                    Reload
+                    Reload Page
                 </button>
             </div>
         );
@@ -194,6 +261,12 @@ const ChatBox = () => {
                     <div className="flex items-center justify-center p-4 text-gray-500">
                         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#ff0059]"></div>
                         <span className="ml-2">Loading messages...</span>
+                    </div>
+                )}
+
+                {!isLoading && allMessages.length === 0 && (
+                    <div className="flex items-center justify-center p-4 text-gray-400">
+                        No messages yet. Start the conversation!
                     </div>
                 )}
 
@@ -238,13 +311,9 @@ const ChatBox = () => {
 
             {(messageCounts.pending > 0 || messageCounts.failed > 0) && (
                 <div className="mt-1 text-xs text-gray-400 flex justify-between">
-                    {messageCounts.pending > 0 && (
-                        <span>📤 {messageCounts.pending} sending...</span>
-                    )}
+                    {messageCounts.pending > 0 && <span>📤 {messageCounts.pending} sending...</span>}
                     {messageCounts.failed > 0 && (
-                        <span className="text-red-400">
-                            ❌ {messageCounts.failed} failed (tap to retry)
-                        </span>
+                        <span className="text-red-400">❌ {messageCounts.failed} failed (tap to retry)</span>
                     )}
                 </div>
             )}

@@ -175,6 +175,7 @@ export interface AppContextType {
   // Data Methods
   fetchProfile: () => Promise<void>
   fetchImages: () => Promise<void>
+  fetchImagesById: (userId: string) => Promise<string>
   fetchMatchRequests: () => Promise<void>
   fetchMatches: () => Promise<void>
   fetchStats: () => Promise<void>
@@ -429,6 +430,40 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [isAuthenticated])
 
+  const fetchImagesById = useCallback(async (userId: string): Promise<string> => {
+    try {
+      logger.debug('Fetching image by user ID:', userId)
+
+      const response = await api.listUserImages(userId)
+
+      if (response.error) {
+        logger.error('Error fetching image for user:', userId, response.error)
+        return ''
+      }
+
+      let imageUrl = ''
+
+      if (typeof response.data === 'string') {
+        imageUrl = response.data
+      } else if (typeof response.data === 'object' && response.data !== null) {
+        // Try to extract the first value if it's wrapped in an object
+        const values = Object.values(response.data)
+        imageUrl = values.length > 0 ? String(values[0]) : ''
+      }
+
+      if (!imageUrl) {
+        logger.warn('No image URL found for user:', userId)
+        return ''
+      }
+
+      logger.debug('Fetched image URL for user:', userId, imageUrl)
+      return imageUrl
+    } catch (error) {
+      logger.error('Exception while fetching image for user:', userId, error)
+      return ''
+    }
+  }, [])
+
   const fetchMatchRequests = useCallback(async () => {
     if (!isAuthenticated) {
       logger.warn('Cannot fetch match requests: not authenticated')
@@ -493,6 +528,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         try {
           // Fetch user details
           const detailsResponse = await api.getUserDetails(otherUserId)
+          const otherUserResponse = await fetchUserProfile(otherUserId.toString())
 
           if (detailsResponse.error || !detailsResponse.data) {
             logger.warn(`Failed to fetch details for user ${otherUserId}`)
@@ -512,6 +548,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
             name: profile?.first_name && profile?.last_name
               ? `${profile.first_name} ${profile.last_name}`
               : 'Unknown',
+            other_user: otherUserResponse,
             age: profile?.age || 0,
             location: userDetails.location || '',
             image: userDetails.image_url || '/default.jpg',
@@ -816,6 +853,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     // Data Methods
     fetchProfile,
     fetchImages,
+    fetchImagesById,
     fetchMatchRequests,
     fetchMatches,
     fetchStats,

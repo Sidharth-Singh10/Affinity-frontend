@@ -10,7 +10,17 @@ import { useApp } from "@/contexts/app-context";
 
 const ChatBox = () => {
     const { user, currentChat } = useApp();
-    const { sendMessage, isConnected,addMessageHandler } = useWebSocket();
+    const { sendMessage, isConnected, addMessageHandler } = useWebSocket();
+    const listRef = useRef<HTMLDivElement | null>(null);
+    const [pendingScrollOnChatChange, setPendingScrollOnChatChange] = useState(false);
+
+    const isNearBottom = useCallback(() => {
+        const el = listRef.current;
+        if (!el) return false;
+        const threshold = 80; // px
+        const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+        return distance < threshold;
+    }, []);
 
     // Compute chatId with proper validation and type safety
     const chatId = useMemo(() => {
@@ -37,6 +47,10 @@ const ChatBox = () => {
         return derivedId;
     }, [user, currentChat]);
 
+    useEffect(() => {
+        if (chatId) setPendingScrollOnChatChange(true);
+    }, [chatId]);
+
     const {
         failedMessages,
         allMessages,
@@ -50,7 +64,6 @@ const ChatBox = () => {
     } = useMessageCache(chatId ?? undefined);
 
     const [input, setInput] = useState("");
-    const bottomRef = useRef<HTMLDivElement | null>(null);
     const previousChatIdRef = useRef<string | null>(null);
     const pendingAcksRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
@@ -69,20 +82,31 @@ const ChatBox = () => {
 
     // Scroll to bottom when messages change
     useEffect(() => {
-        if (allMessages.length > 0) {
-            bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-        }
-    }, [allMessages.length]);
+        const el = listRef.current;
+        if (!el || allMessages.length === 0) return;
 
-    // Mark as read
-    useEffect(() => {
-        if (chatId && allMessages.length > 0) {
-            const timer = setTimeout(() => {
-                markAsRead();
-            }, 100);
-            return () => clearTimeout(timer);
+        const last = allMessages[allMessages.length - 1];
+
+        const shouldScroll =
+            pendingScrollOnChatChange ||
+            last?.incoming ||
+            isNearBottom();
+
+        if (shouldScroll) {
+            el.scrollTop = el.scrollHeight;
+            if (pendingScrollOnChatChange) setPendingScrollOnChatChange(false);
         }
-    }, [chatId, allMessages.length, markAsRead]);
+    }, [allMessages, pendingScrollOnChatChange, isNearBottom]);
+
+    // // Mark as read
+    // useEffect(() => {
+    //     if (chatId && allMessages.length > 0) {
+    //         const timer = setTimeout(() => {
+    //             markAsRead();
+    //         }, 100);
+    //         return () => clearTimeout(timer);
+    //     }
+    // }, [chatId, allMessages.length, markAsRead]);
 
     useEffect(() => {
         if (!chatId) return;
@@ -287,7 +311,7 @@ const ChatBox = () => {
                 />
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-2 py-2">
+            <div ref={listRef} className="flex-1 overflow-y-auto space-y-2 py-2">
                 {isLoading && allMessages.length === 0 && (
                     <div className="flex items-center justify-center p-4 text-gray-500">
                         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#ff0059]"></div>
@@ -319,7 +343,7 @@ const ChatBox = () => {
                     </div>
                 )}
 
-                <div ref={bottomRef} />
+
             </div>
 
             <form onSubmit={handleSend} className="mt-2 flex flex-shrink-0">

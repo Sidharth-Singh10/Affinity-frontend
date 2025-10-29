@@ -16,6 +16,9 @@ interface ChatData {
   messages: ChatMessage[];
   pendingMessages: ChatMessage[];
   failedMessages: ChatMessage[];
+  hasMore?: boolean;
+  nextCursor?: string | null;
+  isLoadingHistory?: boolean;
 }
 
 interface ChatMetadata {
@@ -25,6 +28,9 @@ interface ChatMetadata {
   unreadCount: number;
   hasUnread: boolean;
   isPinned?: boolean;
+  hasMore?: boolean;
+  nextCursor?: string | null;
+  historyLoaded?: boolean;
 }
 
 interface MessageCacheOptions {
@@ -105,6 +111,58 @@ export class MessageCache {
     return [];
   }
 
+  // Add multiple messages (for history loading)
+  public addMessages(chatId: string, messages: ChatMessage[], prepend: boolean = true): boolean {
+    if (!chatId || !messages || messages.length === 0) return false;
+
+    let chatData =
+      this.memoryCache.get(chatId) || this.loadChatFromStorage(chatId) || {
+        chatId,
+        messages: [],
+        pendingMessages: [],
+        failedMessages: [],
+      };
+
+    const newMessages = messages.map(msg => ({
+      ...msg,
+      id: msg.id || this.generateMessageId(),
+      timestamp: new Date(msg.timestamp),
+      status: msg.status || "sent" as const,
+    }));
+
+    // Filter out duplicates
+    const existingIds = new Set(chatData.messages.map(m => m.id));
+    const uniqueMessages = newMessages.filter(m => !existingIds.has(m.id));
+
+    if (uniqueMessages.length === 0) {
+      return true; // All messages already exist
+    }
+
+    if (prepend) {
+      // Add older messages to the beginning
+      chatData.messages = [...uniqueMessages, ...chatData.messages];
+    } else {
+      // Add newer messages to the end
+      chatData.messages = [...chatData.messages, ...uniqueMessages];
+    }
+
+    // Trim if exceeds max
+    if (chatData.messages.length > this.options.maxMessagesPerChat * 2) {
+      chatData.messages = chatData.messages.slice(-this.options.maxMessagesPerChat * 2);
+    }
+
+    this.memoryCache.set(chatId, chatData);
+
+    const latestMessage = newMessages[newMessages.length - 1];
+    this.updateChatMetadata(chatId, {
+      messageCount: chatData.messages.length,
+      lastMessageTime: latestMessage.timestamp,
+    });
+
+    setTimeout(() => this.saveChatToStorage(chatId), 0);
+    return true;
+  }
+
   // Add a new message
   public addMessage(chatId: string, message: ChatMessage): boolean {
     if (!chatId || !message) return false;
@@ -133,7 +191,7 @@ export class MessageCache {
 
     if (isDuplicate) {
       console.debug('Message already exists in cache:', messageWithTimestamp.id);
-      return true; // Return true since message is already there
+      return true;
     }
 
     if (messageWithTimestamp.status === "pending") {
@@ -191,11 +249,10 @@ export class MessageCache {
     pending: ChatMessage[];
     failed: ChatMessage[];
   } {
-    // Always check memory cache first, then fall back to storage
     let chatData = this.memoryCache.get(chatId);
 
     if (!chatData) {
-      let chatData: ChatData | undefined = this.loadChatFromStorage(chatId) || undefined;
+      chatData = this.loadChatFromStorage(chatId) || undefined;
       if (chatData) {
         this.memoryCache.set(chatId, chatData);
       }
@@ -209,6 +266,45 @@ export class MessageCache {
       messages: chatData.messages || [],
       pending: chatData.pendingMessages || [],
       failed: chatData.failedMessages || [],
+    };
+  }
+
+  // Set history loading state
+  public setHistoryLoadingState(chatId: string, isLoading: boolean): void {
+    const chatData = this.memoryCache.get(chatId) || this.loadChatFromStorage(chatId);
+    if (chatData) {
+      chatData.isLoadingHistory = isLoading;
+      this.memoryCache.set(chatId, chatData);
+    }
+  }
+
+  // Update pagination state
+  public updatePaginationState(chatId: string, hasMore: boolean, nextCursor: string | null): void {
+    const chatData = this.memoryCache.get(chatId) || this.loadChatFromStorage(chatId);
+    if (chatData) {
+      chatData.hasMore = hasMore;
+      chatData.nextCursor = nextCursor;
+      this.memoryCache.set(chatId, chatData);
+    }
+
+    this.updateChatMetadata(chatId, {
+      hasMore,
+      nextCursor,
+      historyLoaded: !hasMore,
+    });
+
+    setTimeout(() => this.saveChatToStorage(chatId), 0);
+  }
+
+  // Get pagination state
+  public getPaginationState(chatId: string): { hasMore: boolean; nextCursor: string | null; isLoading: boolean } {
+    const chatData = this.memoryCache.get(chatId) || this.loadChatFromStorage(chatId);
+    const metadata = this.getChatMetadata(chatId);
+
+    return {
+      hasMore: chatData?.hasMore ?? metadata.hasMore ?? true,
+      nextCursor: chatData?.nextCursor ?? metadata.nextCursor ?? null,
+      isLoading: chatData?.isLoadingHistory ?? false,
     };
   }
 
@@ -237,6 +333,9 @@ export class MessageCache {
         unreadCount: 0,
         hasUnread: false,
         isPinned: false,
+        hasMore: true,
+        nextCursor: null,
+        historyLoaded: false,
       }
     );
   }
@@ -256,7 +355,6 @@ export class MessageCache {
     try {
       const stored = this.getFromStorage<ChatData>(`chat_${chatId}`);
       if (stored) {
-        // Ensure all message arrays exist and convert timestamps
         stored.messages = (stored.messages || []).map((msg) => ({
           ...msg,
           timestamp: new Date(msg.timestamp!),
@@ -462,7 +560,6 @@ let messageCacheInstance: MessageCache | null = null;
 
 export function getMessageCache(): MessageCache {
   if (!messageCacheInstance) {
-    // only create it on the client
     if (isBrowser()) {
       messageCacheInstance = new MessageCache({
         maxMessagesPerChat: 100,
@@ -471,12 +568,10 @@ export function getMessageCache(): MessageCache {
         cleanupThresholdDays: 30,
       });
     } else {
-      // return a dummy placeholder on SSR
       messageCacheInstance = new MessageCache({});
     }
   }
   return messageCacheInstance;
 }
 
-// Default export stays same
 export default MessageCache;

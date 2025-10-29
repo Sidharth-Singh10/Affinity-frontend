@@ -10,13 +10,14 @@ import { useWebSocket } from "@/contexts/peroxo-context";
 import { logger } from "@/lib/logger";
 import { ChatMessage, getMessageCache } from "@/lib/message-cache";
 
-
 interface UseMessageCacheResult {
     messages: ChatMessage[];
     pendingMessages: ChatMessage[];
     failedMessages: ChatMessage[];
     allMessages: ChatMessage[];
     isLoading: boolean;
+    isLoadingHistory: boolean;
+    hasMoreHistory: boolean;
     error: Error | null;
     addMessage: (message: ChatMessage) => boolean;
     updateMessageStatus: (
@@ -25,6 +26,7 @@ interface UseMessageCacheResult {
         serverData?: Partial<ChatMessage>
     ) => boolean;
     retryMessage: (messageId: string) => boolean;
+    loadMoreHistory: () => Promise<void>;
     markAsRead: () => void;
     clearFromMemory: () => void;
     getChatMetadata: () => any;
@@ -37,32 +39,93 @@ interface UseMessageCacheResult {
     isEmpty: boolean;
 }
 
-// ===== Hook: useMessageCache =====
-
 export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
     const messageCache = getMessageCache();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
     const [failedMessages, setFailedMessages] = useState<ChatMessage[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+    const [hasMoreHistory, setHasMoreHistory] = useState(true);
     const [error, setError] = useState<Error | null>(null);
 
     const chatIdRef = useRef<string | undefined>(chatId);
     const abortControllerRef = useRef<AbortController | null>(null);
+    const historyRequestIdRef = useRef<number>(0);
 
-    const { addMessageHandler } = useWebSocket();
+    const { addMessageHandler, sendMessage, isConnected } = useWebSocket();
     const { user } = useApp();
 
-    // Early exit if no user
     if (!user || !user.id) {
         logger.error("useMessageCache: No user in context");
         throw new Error("User not available in context");
     }
 
-    // Normalize user ID to string for consistent comparison
     const normalizedUserId = String(user.id);
 
-    // ===== WebSocket listener for incoming messages =====
+    // ===== Handle ChatHistoryResponse from WebSocket =====
+    useEffect(() => {
+        logger.debug('Registering ChatHistoryResponse handler');
+
+        const unsubscribe = addMessageHandler((message: any) => {
+            const historyResponse = message?.ChatHistoryResponse;
+            if (!historyResponse) return;
+
+            logger.debug('ChatHistoryResponse received:', historyResponse);
+
+            const { messages: historyMessages, has_more, next_cursor } = historyResponse;
+
+            if (!chatIdRef.current) {
+                logger.warn('Received history response but no active chat');
+                return;
+            }
+
+            const currentChatId = chatIdRef.current;
+
+            // Convert server messages to ChatMessage format
+            const convertedMessages: ChatMessage[] = (historyMessages || []).map((msg: any) => ({
+                id: msg.message_id,
+                from: String(msg.sender_id),
+                to: String(msg.recipient_id),
+                content: msg.message_text,
+                incoming: String(msg.sender_id) !== normalizedUserId,
+                timestamp: new Date(msg.created_at),
+                status: "sent" as const,
+            }));
+
+            logger.debug(`Processing ${convertedMessages.length} history messages for chat:`, currentChatId);
+
+            // Add messages to cache (prepend as they are older)
+            if (convertedMessages.length > 0) {
+                messageCache.addMessages(currentChatId, convertedMessages, true);
+            }
+
+            // Update pagination state
+            messageCache.updatePaginationState(currentChatId, has_more, next_cursor);
+            messageCache.setHistoryLoadingState(currentChatId, false);
+
+            // Update UI state if still on same chat
+            if (chatIdRef.current === currentChatId) {
+                setMessages((prev) => {
+                    // Merge and deduplicate
+                    const existingIds = new Set(prev.map(m => m.id));
+                    const newMessages = convertedMessages.filter(m => !existingIds.has(m.id));
+                    return [...newMessages, ...prev].sort((a, b) =>
+                        a.timestamp.getTime() - b.timestamp.getTime()
+                    );
+                });
+                setHasMoreHistory(has_more);
+                setIsLoadingHistory(false);
+            }
+        });
+
+        return () => {
+            logger.debug('Unsubscribing ChatHistoryResponse handler');
+            unsubscribe();
+        };
+    }, [normalizedUserId, addMessageHandler, messageCache]);
+
+    // ===== Handle DirectMessage from WebSocket =====
     useEffect(() => {
         logger.debug('Registering WebSocket message handler for user:', normalizedUserId);
 
@@ -79,41 +142,25 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
 
             const { from, to, content, message_id, timestamp } = dm;
 
-            // Normalize IDs to strings for consistent comparison
             const senderId = String(from);
             const receiverId = String(to);
 
-            // Validate message
-            if (!message_id) {
-                logger.warn('Message missing message_id, ignoring');
+            if (!message_id || !content) {
+                logger.warn('Message missing required fields, ignoring');
                 return;
             }
 
-            if (!content) {
-                logger.warn('Message missing content, ignoring');
-                return;
-            }
-
-            // Check if message is for this user
             if (senderId !== normalizedUserId && receiverId !== normalizedUserId) {
-                logger.debug('Message not for current user, ignoring', {
-                    from: senderId,
-                    to: receiverId,
-                    currentUser: normalizedUserId
-                });
+                logger.debug('Message not for current user, ignoring');
                 return;
             }
 
-            // Derive chat ID consistently
             const otherId = senderId === normalizedUserId ? receiverId : senderId;
             const userIdNum = Number(normalizedUserId);
             const otherIdNum = Number(otherId);
 
             if (isNaN(userIdNum) || isNaN(otherIdNum)) {
-                logger.error('Invalid user IDs for chat derivation', {
-                    currentUserId: normalizedUserId,
-                    otherId,
-                });
+                logger.error('Invalid user IDs for chat derivation');
                 return;
             }
 
@@ -134,7 +181,6 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                 status: "sent",
             };
 
-            // Add to global cache
             try {
                 const added = messageCache.addMessage(derivedChatId, messageData);
                 logger.debug('Message added to cache:', added, 'for chat:', derivedChatId);
@@ -142,11 +188,9 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                 logger.error('Failed to add message to cache:', err);
             }
 
-            // If message belongs to current chat, update UI state
             if (derivedChatId === chatIdRef.current) {
                 logger.debug('Updating UI state for current chat');
                 setMessages((prev) => {
-                    // Prevent duplicates
                     if (prev.some(m => m.id === message_id)) {
                         logger.debug('Message already exists in state, skipping');
                         return prev;
@@ -155,11 +199,6 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                     logger.debug('State updated with new message. Total messages:', newMessages.length);
                     return newMessages;
                 });
-            } else {
-                logger.debug('Message not for current chat, UI not updated', {
-                    derivedChatId,
-                    currentChatId: chatIdRef.current
-                });
             }
         });
 
@@ -167,9 +206,8 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
             logger.debug('Unsubscribing WebSocket message handler');
             unsubscribe();
         };
-    }, [normalizedUserId, addMessageHandler, messageCache]); // Include messageCache in dependencies
+    }, [normalizedUserId, addMessageHandler, messageCache]);
 
-    // Update chatId ref whenever it changes
     useEffect(() => {
         chatIdRef.current = chatId;
         logger.debug('Current chatId updated to:', chatId);
@@ -182,10 +220,10 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
             setPendingMessages([]);
             setFailedMessages([]);
             setError(null);
+            setHasMoreHistory(true);
             return;
         }
 
-        // Cancel any pending operations
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
@@ -202,10 +240,13 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                 const { messages: confirmed, pending, failed } =
                     messageCache.getAllMessages(chatId);
 
+                const paginationState = messageCache.getPaginationState(chatId);
+
                 logger.debug('Messages loaded:', {
                     confirmed: confirmed.length,
                     pending: pending.length,
-                    failed: failed.length
+                    failed: failed.length,
+                    hasMore: paginationState.hasMore,
                 });
 
                 const controller = abortControllerRef.current;
@@ -215,8 +256,15 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                     setMessages(confirmed);
                     setPendingMessages(pending);
                     setFailedMessages(failed);
+                    setHasMoreHistory(paginationState.hasMore);
 
                     messageCache.markChatAsRead(chatId);
+
+                    // Auto-load history if no messages exist
+                    if (confirmed.length === 0 && paginationState.hasMore && isConnected) {
+                        logger.debug('No messages in cache, auto-loading history');
+                        loadMoreHistory();
+                    }
                 }
             } catch (err) {
                 const controller = abortControllerRef.current;
@@ -244,7 +292,49 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                 abortControllerRef.current.abort();
             }
         };
-    }, [chatId, messageCache]); // Include messageCache
+    }, [chatId, messageCache, isConnected]);
+
+    // ===== Load more history =====
+    const loadMoreHistory = useCallback(async () => {
+        if (!chatId || !isConnected || isLoadingHistory || !hasMoreHistory) {
+            logger.debug('Cannot load history:', { chatId, isConnected, isLoadingHistory, hasMoreHistory });
+            return;
+        }
+
+        const requestId = ++historyRequestIdRef.current;
+        logger.debug('Loading more history for chat:', chatId, 'Request ID:', requestId);
+
+        setIsLoadingHistory(true);
+        messageCache.setHistoryLoadingState(chatId, true);
+
+        try {
+            const paginationState = messageCache.getPaginationState(chatId);
+            const request: any = {
+                GetPaginatedMessages: {
+                    conversation_id: chatId,
+                }
+            };
+
+            // Include cursor if we have one (for subsequent pages)
+            if (paginationState.nextCursor) {
+                request.GetPaginatedMessages.message_id = paginationState.nextCursor;
+            }
+
+            logger.debug('Sending history request:', request);
+            sendMessage(request);
+
+            // Response will be handled by the ChatHistoryResponse listener
+        } catch (err) {
+            // Only update state if this is still the latest request
+            if (requestId === historyRequestIdRef.current) {
+                const e = err instanceof Error ? err : new Error(String(err));
+                setError(e);
+                setIsLoadingHistory(false);
+                messageCache.setHistoryLoadingState(chatId, false);
+                logger.error('Failed to load history:', e);
+            }
+        }
+    }, [chatId, isConnected, isLoadingHistory, hasMoreHistory, sendMessage, messageCache]);
 
     // ===== Add message =====
     const addMessage = useCallback(
@@ -268,7 +358,6 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
                         setFailedMessages((prev) => [...prev, msgWithDate]);
                     } else {
                         setMessages((prev) => {
-                            // Prevent duplicates
                             if (prev.some(m => m.id === message.id)) {
                                 return prev;
                             }
@@ -349,8 +438,6 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
         [chatId, messageCache]
     );
 
-    // ===== Computed message lists =====
-    // Use useMemo instead of useCallback to ensure this recalculates when dependencies change
     const allMessages = useMemo((): ChatMessage[] => {
         return [...messages, ...pendingMessages, ...failedMessages].sort(
             (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
@@ -394,10 +481,13 @@ export const useMessageCache = (chatId?: string): UseMessageCacheResult => {
         failedMessages,
         allMessages,
         isLoading,
+        isLoadingHistory,
+        hasMoreHistory,
         error,
         addMessage,
         updateMessageStatus,
         retryMessage,
+        loadMoreHistory,
         markAsRead,
         clearFromMemory,
         getChatMetadata,
